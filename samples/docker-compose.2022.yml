@@ -1,0 +1,8 @@
+services:
+  rs2022:
+    build: ../src/rs2022
+    container_name: rs2022
+    ports:
+      - 2022:80   # upstream for the reverse proxy (docker-compose.proxy.yml)
+    volumes:
+      - ./rs2022:C:/ProgramData/Autodesk/Revit Server 2022/Projects

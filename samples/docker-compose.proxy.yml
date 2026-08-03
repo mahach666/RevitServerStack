@@ -1,0 +1,18 @@
+# Reverse proxy that exposes every Revit Server version on a single port 80,
+# routing by the version year baked into each Revit Server IIS path.
+# Runs on the default (Linux) Docker engine; reaches the Windows rs<year>
+# containers through the host ports they publish (host.docker.internal:<year>).
+#
+#   docker compose -f docker-compose.proxy.yml up -d
+#
+services:
+  revit-proxy:
+    image: nginx:stable
+    container_name: revit-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
