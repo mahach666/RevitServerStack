@@ -58,7 +58,18 @@ function Write-VersionCompose {
     $buildContext = ConvertTo-ComposePath (Join-Path (Join-Path $RepoRoot 'src') "rs$year")
     $dataDir = ConvertTo-ComposePath ([string]$Version.dataDir)
     $target = "C:/ProgramData/Autodesk/Revit Server $year/Projects"
-    $portMapping = "$([int]$Version.hostPort):80"
+    $portLines = @("      - $(ConvertTo-YamlSingleQuoted "$([int]$Version.hostPort):80")")
+
+    # Revit connects over WCF net.tcp on 808, not over HTTP. Without this
+    # mapping Revit fails with "TCP 10061 connection refused" even though the
+    # admin web page answers perfectly well through the proxy.
+    $servesRevit = $false
+    if ($Version.PSObject.Properties.Match('revitClients').Count -gt 0) {
+        $servesRevit = [bool]$Version.revitClients
+    }
+    if ($servesRevit) {
+        $portLines += "      - $(ConvertTo-YamlSingleQuoted '808:808')"
+    }
 
     # Long-syntax bind mount: the short "src:dst" form has to be split on ':',
     # which is ambiguous when both sides start with a Windows drive letter.
@@ -69,8 +80,8 @@ function Write-VersionCompose {
         "  rs${year}:",
         "    build: $(ConvertTo-YamlSingleQuoted $buildContext)",
         "    container_name: rs${year}",
-        '    ports:',
-        "      - $(ConvertTo-YamlSingleQuoted $portMapping)",
+        '    ports:'
+    ) + $portLines + @(
         '    volumes:',
         '      - type: bind',
         "        source: $(ConvertTo-YamlSingleQuoted $dataDir)",

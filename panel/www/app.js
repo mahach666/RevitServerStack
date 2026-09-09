@@ -280,6 +280,9 @@ function renderVersionCard(version) {
       ? esc(version.imageName)
       : '<span class="muted">не собран — первая сборка качает ~5 ГБ (20–45 мин)</span>'}</dd>
     <dt>Модели</dt><dd>${esc(version.dataDir)}</dd>
+    <dt>Revit</dt><dd>${version.revitClients
+      ? 'порт 808 опубликован — клиенты Revit смогут подключиться'
+      : '<span class="warn-text">порт 808 не опубликован — Revit подключиться не сможет (включите в настройках)</span>'}</dd>
     ${openUrl ? `<dt>Адрес</dt><dd><a class="link" href="${esc(openUrl)}" target="_blank" rel="noopener">${esc(openUrl)}</a></dd>` : ''}`;
   card.appendChild(meta);
 
@@ -491,6 +494,10 @@ function fillSettings() {
       </label>
       <label>Папка с моделями
         <input type="text" data-field="dataDir" data-index="${index}" value="${esc(version.dataDir)}">
+      </label>
+      <label class="check" title="Публикует порт 808 (net.tcp). Без него Revit не подключится. Порт фиксирован в протоколе, поэтому его может занимать только одна версия.">
+        <input type="checkbox" data-field="revitClients" data-index="${index}" ${version.revitClients ? 'checked' : ''}>
+        <span>порт&nbsp;808 для&nbsp;Revit</span>
       </label>`;
     host.appendChild(row);
   });
@@ -518,6 +525,7 @@ function collectSettings() {
     const version = config.versions[Number(input.dataset.index)];
     const field = input.dataset.field;
     if (field === 'enabled') version.enabled = input.checked;
+    else if (field === 'revitClients') version.revitClients = input.checked;
     else if (field === 'hostPort') version.hostPort = Number(input.value);
     else version.dataDir = input.value.trim();
   });

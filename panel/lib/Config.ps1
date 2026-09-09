@@ -24,12 +24,17 @@ function New-DefaultConfig {
     $versions = @()
     foreach ($year in (Get-DiscoveredYears -RepoRoot $RepoRoot)) {
         $versions += [pscustomobject]@{
-            year     = $year
-            enabled  = $true
-            hostPort = $year
+            year         = $year
+            enabled      = $true
+            hostPort     = $year
+            # Revit itself talks WCF net.tcp on port 808, not HTTP on 80 - the
+            # admin web page working proves nothing about Revit being able to
+            # connect. 808 is fixed in the protocol, so exactly one version can
+            # own it; see Test-PanelConfig.
+            revitClients = $false
             # Same location the shipped samples/docker-compose.<year>.yml uses,
             # so an existing installation keeps its models without moving them.
-            dataDir  = (Join-Path (Join-Path $RepoRoot 'samples') ("rs$year"))
+            dataDir      = (Join-Path (Join-Path $RepoRoot 'samples') ("rs$year"))
         }
     }
 
@@ -75,7 +80,7 @@ function Merge-ConfigWithDefaults {
             if ($savedVersion.PSObject.Properties.Match('year').Count -eq 0) { continue }
             $target = $result.versions | Where-Object { $_.year -eq [int]$savedVersion.year }
             if (-not $target) { continue }
-            foreach ($key in @('enabled', 'hostPort', 'dataDir')) {
+            foreach ($key in @('enabled', 'hostPort', 'dataDir', 'revitClients')) {
                 if ($savedVersion.PSObject.Properties.Match($key).Count -gt 0 -and $null -ne $savedVersion.$key) {
                     $target.$key = $savedVersion.$key
                 }
@@ -133,6 +138,15 @@ function Test-PanelConfig {
 
     if ($proxyPort -eq $panelPort) {
         $errors += 'Порт прокси совпадает с портом панели.'
+    }
+
+    # net.tcp 808 is baked into the Revit Server protocol - Revit connects to
+    # net.tcp://<host>/ModelService<year>/... with no port, so it is always 808.
+    # Two containers cannot publish the same host port.
+    $netTcpOwners = @($Config.versions | Where-Object { $_.revitClients } | ForEach-Object { [int]$_.year })
+    if ($netTcpOwners.Count -gt 1) {
+        $errors += ("Порт 808 для Revit включён сразу у нескольких версий ($($netTcpOwners -join ', ')). " +
+            'Порт 808 фиксирован в протоколе Revit Server, поэтому его может занимать только одна версия.')
     }
 
     return $errors

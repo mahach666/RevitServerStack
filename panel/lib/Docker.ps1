@@ -197,18 +197,24 @@ function Get-PanelStatus {
             $statusText = 'Движок Windows-контейнеров недоступен'
         }
 
+        $servesRevit = $false
+        if ($version.PSObject.Properties.Match('revitClients').Count -gt 0) {
+            $servesRevit = [bool]$version.revitClients
+        }
+
         $versions += [pscustomobject]@{
-            year       = $year
-            enabled    = [bool]$version.enabled
-            hostPort   = [int]$version.hostPort
-            dataDir    = [string]$version.dataDir
-            state      = $state
-            statusText = $statusText
-            ports      = $ports
-            imageBuilt = $images.ContainsKey($imageName)
-            imageName  = $imageName
-            directUrl  = "http://localhost:$([int]$version.hostPort)/RevitServerAdmin$year/"
-            proxyUrl   = "http://localhost:$([int]$Config.proxy.port)/RevitServerAdmin$year/"
+            year         = $year
+            enabled      = [bool]$version.enabled
+            hostPort     = [int]$version.hostPort
+            dataDir      = [string]$version.dataDir
+            revitClients = $servesRevit
+            state        = $state
+            statusText   = $statusText
+            ports        = $ports
+            imageBuilt   = $images.ContainsKey($imageName)
+            imageName    = $imageName
+            directUrl    = "http://localhost:$([int]$version.hostPort)/RevitServerAdmin$year/"
+            proxyUrl     = "http://localhost:$([int]$Config.proxy.port)/RevitServerAdmin$year/"
         }
     }
 

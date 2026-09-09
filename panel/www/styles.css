@@ -310,9 +310,11 @@ main { padding: 20px 22px 32px; max-width: 1500px; margin: 0 auto; }
 .hint-inline { flex: 1 1 260px; margin: 0; align-self: center; }
 
 .settings-table { display: flex; flex-direction: column; gap: 8px; }
+.warn-text { color: var(--warn); }
+
 .settings-row {
   display: grid;
-  grid-template-columns: 116px 92px 1fr;
+  grid-template-columns: 116px 92px 1fr auto;
   gap: 10px;
   align-items: center;
   padding: 9px 11px;
