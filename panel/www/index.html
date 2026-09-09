@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="panel-token" content="__PANEL_TOKEN__">
+  <title>Revit Server — панель управления</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-title">
+    <h1>Revit Server</h1>
+    <span class="subtitle">панель управления</span>
+  </div>
+
+  <div class="engines" id="engines"></div>
+
+  <div class="topbar-actions">
+    <button type="button" class="btn btn-primary" id="btn-start-all">Запустить всё</button>
+    <button type="button" class="btn" id="btn-stop-all">Остановить всё</button>
+    <button type="button" class="btn btn-ghost" id="btn-settings">Настройки</button>
+  </div>
+</header>
+
+<main>
+  <div id="alerts" class="alerts"></div>
+
+  <section class="cards" id="cards" aria-label="Версии Revit Server"></section>
+
+  <section class="panel-block">
+    <div class="block-head">
+      <h2>Журнал операций</h2>
+      <span class="muted" id="log-title">Выберите операцию, чтобы увидеть вывод docker</span>
+      <div class="block-head-actions">
+        <button type="button" class="btn btn-small" id="btn-cancel-job" hidden>Прервать</button>
+        <button type="button" class="btn btn-small btn-ghost" id="btn-clear-log">Очистить</button>
+      </div>
+    </div>
+    <pre class="log" id="log" tabindex="0"></pre>
+    <div class="jobs" id="jobs"></div>
+  </section>
+
+  <footer class="foot">
+    <span class="muted" id="foot-info"></span>
+    <button type="button" class="btn btn-small btn-ghost" id="btn-shutdown">Закрыть панель</button>
+  </footer>
+</main>
+
+<!-- Settings -->
+<div class="modal-backdrop" id="settings-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="modal-head">
+      <h2 id="settings-title">Настройки</h2>
+      <button type="button" class="icon-btn" id="btn-close-settings" aria-label="Закрыть">&times;</button>
+    </div>
+
+    <div class="modal-body">
+      <div id="settings-errors" class="errors" hidden></div>
+
+      <h3>Версии</h3>
+      <p class="hint">Порт — на нём версия публикуется на этом компьютере. Папка — где физически лежат модели.</p>
+      <div class="settings-table" id="settings-versions"></div>
+
+      <h3>Обратный прокси</h3>
+      <p class="hint">
+        Публикует все версии на одном порту и маршрутизирует по году в адресе,
+        чтобы в Revit можно было подключаться по имени компьютера без порта.
+      </p>
+      <div class="form-row">
+        <label class="check">
+          <input type="checkbox" id="proxy-enabled">
+          <span>Использовать прокси</span>
+        </label>
+        <label>Порт
+          <input type="number" id="proxy-port" min="1" max="65535" class="input-narrow">
+        </label>
+        <label>Образ
+          <input type="text" id="proxy-image" class="input-wide">
+        </label>
+      </div>
+
+      <h3>Docker</h3>
+      <div class="form-row">
+        <label>Контекст Windows-контейнеров
+          <input type="text" id="windows-context" list="context-list" class="input-wide">
+        </label>
+        <label>Контекст прокси (Linux)
+          <input type="text" id="proxy-context" list="context-list" class="input-wide" placeholder="текущий контекст">
+        </label>
+        <datalist id="context-list"></datalist>
+      </div>
+      <div class="form-row">
+        <label>Имя compose-проекта
+          <input type="text" id="compose-project" class="input-wide">
+        </label>
+        <p class="hint hint-inline">
+          Определяет имена образов (<code>&lt;проект&gt;-rs2022</code>) и контейнеров.
+          Менять не нужно: другое имя заставит пересобрать образы заново.
+        </p>
+      </div>
+
+      <h3>Панель</h3>
+      <div class="form-row">
+        <label>Порт панели
+          <input type="number" id="panel-port" min="1" max="65535" class="input-narrow">
+        </label>
+        <label class="check">
+          <input type="checkbox" id="auto-open">
+          <span>Открывать браузер при запуске</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <span class="muted" id="settings-note"></span>
+      <div>
+        <button type="button" class="btn btn-ghost" id="btn-cancel-settings">Отмена</button>
+        <button type="button" class="btn btn-primary" id="btn-save-settings">Сохранить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

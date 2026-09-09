@@ -405,3 +405,5 @@ FodyWeavers.xsd
 **/.idea/**/*.iml
 **/.idea/**/contentModel.xml
 **/.idea/**/modules.xml
+# Revit Server control panel: user settings, generated compose files, job logs
+panel/runtime/
