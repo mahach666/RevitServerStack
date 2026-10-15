@@ -2,6 +2,22 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- The panel, the messages it sends and its console window are translated into English, Russian, German, French, Spanish, Brazilian Portuguese, Simplified Chinese and Japanese. The panel starts in the language of the browser (English when it is not available), a selector in the header changes it and the choice is remembered. The menu of the tray icon follows the language of Windows. Texts live in `panel/www/i18n/*.json`, used by the page and by PowerShell alike. How to fix or add a language: [CONTRIBUTING.md](CONTRIBUTING.md#translations).
+- Self-checks of the translations: every catalog has the keys, placeholders and markup of English, no text is left in code, every key is used, and the tray menu has all languages.
+
+### Changed
+
+- The console window of the panel is no longer Russian only: it speaks the language of Windows.
+- The English README names buttons and settings as the English interface does, instead of the Russian ones.
+
+### Fixed
+
+- Settings did not open when docker had exactly one context: the list of contexts was sent as a single string, not as a list.
+
 ## [1.1.0] - 2026-10-15
 
 Docker on another computer.

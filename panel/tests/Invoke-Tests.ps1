@@ -14,7 +14,9 @@ Set-StrictMode -Version 1.0
 $ErrorActionPreference = 'Stop'
 
 $panelRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-foreach ($lib in 'Common', 'Config', 'Compose', 'Docker') { . (Join-Path $panelRoot "lib\$lib.ps1") }
+$repoRoot = Split-Path -Parent $panelRoot
+foreach ($lib in 'Common', 'I18n', 'Config', 'Compose', 'Docker') { . (Join-Path $panelRoot "lib\$lib.ps1") }
+Initialize-I18n -Directory (Join-Path $panelRoot 'www\i18n')
 
 $script:failed = 0
 
@@ -44,6 +46,17 @@ function New-TempDir {
     New-Item -ItemType Directory -Path $path -Force | Out-Null
     return $path
 }
+
+function Read-Catalog {
+    param([string]$Code)
+    $text = [System.IO.File]::ReadAllText((Join-Path $panelRoot "www\i18n\$Code.json"), [System.Text.Encoding]::UTF8)
+    $table = [ordered]@{}
+    foreach ($entry in ($text | ConvertFrom-Json).PSObject.Properties) { $table[$entry.Name] = [string]$entry.Value }
+    return $table
+}
+
+function Get-Placeholders { param([string]$Text) return (([regex]::Matches($Text, '\{(\d+)\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object) -join ',') }
+function Get-Markup { param([string]$Text) return (([regex]::Matches($Text, '</?[a-zA-Z][^>]*>') | ForEach-Object { $_.Value }) -join '') }
 
 # A repo root that only has what version discovery looks at.
 function New-FakeRepo {
@@ -466,6 +479,22 @@ Check 'server: token, Host header, path traversal, shutdown' {
         $config = Send-TestRequest -Url "$base/api/config" -Headers @{ 'X-Panel-Token' = $token }
         Assert-Equal 200 $config.Status
         Assert-Equal 2022 (($config.Body | ConvertFrom-Json).config.versions[0].year)
+        # The list of contexts is a list even with one context in it (docker has "default" only here).
+        Assert-True (($config.Body | ConvertFrom-Json).contexts -is [array]) 'the contexts were sent as one string, not as a list'
+
+        # The same refusal comes back in the language of the page (the name is
+        # checked before docker is called, so no docker is needed here).
+        $badName = '{"name":"x y","endpoint":"ssh://srv"}'
+        foreach ($code in @('en', 'ru', 'de', 'ja')) {
+            $answer = Send-TestRequest -Url "$base/api/context" -Method POST -Headers @{ 'X-Panel-Token' = $token; 'X-Panel-Lang' = $code } -Body $badName
+            Assert-Equal 400 $answer.Status
+            $expected = (Read-Catalog $code)['ctx.badName']
+            Assert-Equal $expected (($answer.Body | ConvertFrom-Json).error)
+        }
+        $noHeader = Send-TestRequest -Url "$base/api/context" -Method POST -Headers @{ 'X-Panel-Token' = $token } -Body $badName
+        Assert-Equal (Read-Catalog 'en')['ctx.badName'] (($noHeader.Body | ConvertFrom-Json).error)
+        $unknown = Send-TestRequest -Url "$base/api/context" -Method POST -Headers @{ 'X-Panel-Token' = $token; 'X-Panel-Lang' = '../../x' } -Body $badName
+        Assert-Equal (Read-Catalog 'en')['ctx.badName'] (($unknown.Body | ConvertFrom-Json).error)
 
         if ($hasDocker) {
             $auth = @{ 'X-Panel-Token' = $token }
@@ -489,9 +518,103 @@ Check 'server: token, Host header, path traversal, shutdown' {
     }
 }
 
+# --------------------------------------------------------------------- i18n --
+
+$languageCodes = @((([System.IO.File]::ReadAllText((Join-Path $panelRoot 'www\i18n\index.json'), [System.Text.Encoding]::UTF8)) | ConvertFrom-Json) | ForEach-Object { [string]$_.code })
+
+Check 'i18n: every language has the keys, placeholders and markup of English' {
+    Assert-True ($languageCodes -contains 'en' -and $languageCodes -contains 'ru') 'English and Russian must be listed'
+    $english = Read-Catalog 'en'
+    foreach ($code in $languageCodes) {
+        $catalog = Read-Catalog $code
+        $missing = @($english.Keys | Where-Object { -not $catalog.Contains($_) })
+        $extra = @($catalog.Keys | Where-Object { -not $english.Contains($_) })
+        Assert-True ($missing.Count -eq 0) "$code lacks: $($missing -join ', ')"
+        Assert-True ($extra.Count -eq 0) "$code has keys English does not: $($extra -join ', ')"
+        foreach ($key in $english.Keys) {
+            $value = $catalog[$key]
+            Assert-True (-not [string]::IsNullOrWhiteSpace($value)) "$code/$key is empty"
+            Assert-Equal (Get-Placeholders $english[$key]) (Get-Placeholders $value)
+            Assert-Equal (Get-Markup $english[$key]) (Get-Markup $value)
+            # String.Format and the page both read {0}; any other brace would break them.
+            Assert-True (($value -replace '\{\d+\}', '') -notmatch '[{}]') "$code/$key has a stray brace"
+        }
+    }
+}
+
+Check 'i18n: no text of the code is left outside the catalogs' {
+    $cyrillic = '[\u0400-\u04FF]'
+    $files = @(Get-ChildItem -LiteralPath (Join-Path $panelRoot 'lib') -Filter '*.ps1' -File) +
+        @(Get-Item -LiteralPath (Join-Path $panelRoot 'server.ps1')) +
+        @(Get-Item -LiteralPath (Join-Path $panelRoot 'www\app.js')) +
+        @(Get-Item -LiteralPath (Join-Path $panelRoot 'www\index.html')) +
+        @(Get-Item -LiteralPath (Join-Path $repoRoot 'launcher\Build.ps1'))
+    foreach ($file in $files) {
+        $text = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)
+        Assert-True ($text -notmatch $cyrillic) "$($file.Name) has Russian text, it belongs in panel\www\i18n\ru.json"
+    }
+    foreach ($code in $languageCodes | Where-Object { $_ -ne 'ru' }) {
+        $text = [System.IO.File]::ReadAllText((Join-Path $panelRoot "www\i18n\$code.json"), [System.Text.Encoding]::UTF8)
+        Assert-True ($text -notmatch $cyrillic) "$code.json has Russian text"
+    }
+}
+
+Check 'i18n: every key the code asks for exists, and every key is used' {
+    $english = Read-Catalog 'en'
+    $used = New-Object 'System.Collections.Generic.HashSet[string]'
+    $sources = @(Get-ChildItem -LiteralPath (Join-Path $panelRoot 'lib') -Filter '*.ps1' -File) + @(Get-Item -LiteralPath (Join-Path $panelRoot 'server.ps1'))
+    foreach ($file in $sources) {
+        $text = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)
+        foreach ($m in [regex]::Matches($text, "\bT '([A-Za-z0-9.]+)'")) { [void]$used.Add($m.Groups[1].Value) }
+        foreach ($m in [regex]::Matches($text, "\bLabel = '([A-Za-z0-9.]+)'")) { [void]$used.Add($m.Groups[1].Value) }
+    }
+    $js = [System.IO.File]::ReadAllText((Join-Path $panelRoot 'www\app.js'), [System.Text.Encoding]::UTF8)
+    foreach ($m in [regex]::Matches($js, "\bt\('([A-Za-z0-9.]+)'")) { [void]$used.Add($m.Groups[1].Value) }
+    foreach ($m in [regex]::Matches($js, "key = '([A-Za-z0-9.]+)'")) { [void]$used.Add($m.Groups[1].Value) }
+    $html = [System.IO.File]::ReadAllText((Join-Path $panelRoot 'www\index.html'), [System.Text.Encoding]::UTF8)
+    foreach ($m in [regex]::Matches($html, 'data-i18n(?:-html|-title|-placeholder|-aria-label)?="([A-Za-z0-9.]+)"')) { [void]$used.Add($m.Groups[1].Value) }
+
+    $missing = @($used | Where-Object { -not $english.Contains($_) })
+    Assert-True ($missing.Count -eq 0) "keys used but not in English: $($missing -join ', ')"
+    # Built from a variable at run time: job.<action>, state.<state>.
+    $built = @('job.up', 'job.build', 'job.stop', 'job.restart', 'job.down', 'state.running', 'state.starting', 'state.stopped', 'state.absent', 'state.error', 'state.unknown')
+    $unused = @($english.Keys | Where-Object { -not $used.Contains($_) -and $built -notcontains $_ })
+    Assert-True ($unused.Count -eq 0) "keys nobody uses: $($unused -join ', ')"
+}
+
+Check 'i18n: the languages Windows may ask for map to a catalog' {
+    $cases = @{ 'ru-RU' = 'ru'; 'RU' = 'ru'; 'en-GB' = 'en'; 'zh' = 'zh-CN'; 'zh-TW' = 'zh-CN'; 'pt-PT' = 'pt-BR'; 'de-AT' = 'de'; 'ja-JP' = 'ja'; 'xx' = 'en'; '' = 'en'; '../x' = 'en' }
+    foreach ($name in $cases.Keys) { Assert-Equal $cases[$name] (Resolve-Language $name) }
+}
+
+Check 'i18n: T answers in the language asked for, and falls back to English' {
+    $saved = $script:Language
+    try {
+        $script:Language = 'en'
+        Assert-Equal 'Port 1 is used by two versions at once (2 and 3).' (T 'cfg.dupPort' 1 2 3)
+        $script:Language = 'ru'
+        Assert-True ((T 'cfg.dupPort' 1 2 3) -match '[\u0400-\u04FF]') 'the Russian text is not Russian'
+        Assert-True ((T 'cfg.dupPort' 1 2 3) -match '1.*2.*3') 'the arguments were not filled in'
+        Assert-Equal 'no.such.key' (T 'no.such.key')
+    } finally { $script:Language = $saved }
+}
+
+Check 'i18n: the tray launcher has every text in all eight languages' {
+    $source = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'launcher\RevitServerStack.cs'), [System.Text.Encoding]::UTF8)
+    $table = [regex]::Match($source, '(?s)Dictionary<string, string\[\]> Texts.*?\n        \};')
+    Assert-True $table.Success 'the text table of the launcher was not found'
+    $entries = [regex]::Matches($table.Value, '(?s)\{ "(\w+)", new\[\] \{(.*?)\} \},')
+    Assert-True ($entries.Count -ge 11) "only $($entries.Count) entries found"
+    foreach ($entry in $entries) {
+        $literals = @([regex]::Matches($entry.Groups[2].Value, '"((?:[^"\\]|\\.)*)"') | ForEach-Object { $_.Groups[1].Value })
+        Assert-Equal 8 $literals.Count
+        $first = Get-Placeholders $literals[0]
+        foreach ($literal in $literals) { Assert-Equal $first (Get-Placeholders $literal) }
+    }
+}
+
 # ------------------------------------------------------------------ launcher --
 
-$repoRoot = Split-Path -Parent $panelRoot
 $buildScript = Join-Path $repoRoot 'launcher\Build.ps1'
 
 Check 'launcher: builds, starts the panel, and the panel stops with it' {

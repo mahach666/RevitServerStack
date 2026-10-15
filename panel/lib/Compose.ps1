@@ -114,7 +114,7 @@ function Write-ProxyNginxConf {
     )
 
     # The value is written into nginx.conf as it is.
-    if (-not (Test-HostName $UpstreamHost)) { throw "Недопустимый адрес для nginx: $UpstreamHost" }
+    if (-not (Test-HostName $UpstreamHost)) { throw "Invalid upstream address for nginx: $UpstreamHost" }
 
     $enabled = @($Config.versions | Where-Object { $_.enabled })
 

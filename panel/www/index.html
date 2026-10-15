@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,30 +13,31 @@
 <header class="topbar">
   <div class="topbar-title">
     <h1>Revit Server Stack</h1>
-    <span class="subtitle">панель управления</span>
+    <span class="subtitle" data-i18n="app.subtitle"></span>
   </div>
 
   <div class="engines" id="engines"></div>
 
   <div class="topbar-actions">
-    <button type="button" class="btn btn-primary" id="btn-start-all">Запустить всё</button>
-    <button type="button" class="btn" id="btn-stop-all">Остановить всё</button>
-    <button type="button" class="btn btn-ghost" id="btn-settings">Настройки</button>
+    <select id="lang" class="lang-select" data-i18n-title="lang.label" data-i18n-aria-label="lang.label"></select>
+    <button type="button" class="btn btn-primary" id="btn-start-all" data-i18n="topbar.startAll"></button>
+    <button type="button" class="btn" id="btn-stop-all" data-i18n="topbar.stopAll"></button>
+    <button type="button" class="btn btn-ghost" id="btn-settings" data-i18n="topbar.settings"></button>
   </div>
 </header>
 
 <main>
   <div id="alerts" class="alerts"></div>
 
-  <section class="cards" id="cards" aria-label="Версии Revit Server"></section>
+  <section class="cards" id="cards" data-i18n-aria-label="cards.aria"></section>
 
   <section class="panel-block">
     <div class="block-head">
-      <h2>Журнал операций</h2>
-      <span class="muted" id="log-title">Выберите операцию, чтобы увидеть вывод docker</span>
+      <h2 data-i18n="log.title"></h2>
+      <span class="muted" id="log-title"></span>
       <div class="block-head-actions">
-        <button type="button" class="btn btn-small" id="btn-cancel-job" hidden>Прервать</button>
-        <button type="button" class="btn btn-small btn-ghost" id="btn-clear-log">Очистить</button>
+        <button type="button" class="btn btn-small" id="btn-cancel-job" data-i18n="log.cancel" hidden></button>
+        <button type="button" class="btn btn-small btn-ghost" id="btn-clear-log" data-i18n="log.clear"></button>
       </div>
     </div>
     <pre class="log" id="log" tabindex="0"></pre>
@@ -45,7 +46,7 @@
 
   <footer class="foot">
     <span class="muted" id="foot-info"></span>
-    <button type="button" class="btn btn-small btn-ghost" id="btn-shutdown">Закрыть панель</button>
+    <button type="button" class="btn btn-small btn-ghost" id="btn-shutdown" data-i18n="foot.shutdown"></button>
   </footer>
 </main>
 
@@ -53,93 +54,78 @@
 <div class="modal-backdrop" id="settings-modal" hidden>
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div class="modal-head">
-      <h2 id="settings-title">Настройки</h2>
-      <button type="button" class="icon-btn" id="btn-close-settings" aria-label="Закрыть">&times;</button>
+      <h2 id="settings-title" data-i18n="settings.title"></h2>
+      <button type="button" class="icon-btn" id="btn-close-settings" data-i18n-aria-label="settings.close">&times;</button>
     </div>
 
     <div class="modal-body">
       <div id="settings-errors" class="errors" hidden></div>
 
-      <h3>Версии</h3>
-      <p class="hint">Порт — на нём версия публикуется на этом компьютере. Папка — где физически лежат модели.</p>
+      <h3 data-i18n="settings.versions"></h3>
+      <p class="hint" data-i18n="settings.versionsHint"></p>
       <div class="settings-table" id="settings-versions"></div>
 
-      <h3>Обратный прокси</h3>
-      <p class="hint">
-        Публикует все версии на одном порту и маршрутизирует по году в адресе,
-        чтобы в Revit можно было подключаться по имени компьютера без порта.
-      </p>
+      <h3 data-i18n="settings.proxy"></h3>
+      <p class="hint" data-i18n="settings.proxyHint"></p>
       <div class="form-row">
         <label class="check">
           <input type="checkbox" id="proxy-enabled">
-          <span>Использовать прокси</span>
+          <span data-i18n="settings.proxyEnabled"></span>
         </label>
-        <label>Порт
+        <label><span data-i18n="settings.port"></span>
           <input type="number" id="proxy-port" min="1" max="65535" class="input-narrow">
         </label>
-        <label>Образ
+        <label><span data-i18n="settings.image"></span>
           <input type="text" id="proxy-image" class="input-wide">
         </label>
       </div>
 
-      <h3>Docker</h3>
+      <h3 data-i18n="settings.docker"></h3>
       <div class="form-row">
-        <label>Контекст Windows-контейнеров
+        <label><span data-i18n="settings.windowsContext"></span>
           <input type="text" id="windows-context" list="context-list" class="input-wide">
         </label>
-        <label>Контекст прокси (Linux)
-          <input type="text" id="proxy-context" list="context-list" class="input-wide" placeholder="текущий контекст">
+        <label><span data-i18n="settings.proxyContext"></span>
+          <input type="text" id="proxy-context" list="context-list" class="input-wide" data-i18n-placeholder="settings.currentContext">
         </label>
         <datalist id="context-list"></datalist>
       </div>
       <div class="form-row">
-        <label>Имя compose-проекта
+        <label><span data-i18n="settings.project"></span>
           <input type="text" id="compose-project" class="input-wide">
         </label>
-        <p class="hint hint-inline">
-          Определяет имена образов (<code>&lt;проект&gt;-rs2022</code>) и контейнеров.
-          Менять не нужно: другое имя заставит пересобрать образы заново.
-        </p>
+        <p class="hint hint-inline" data-i18n-html="settings.projectHint"></p>
       </div>
 
-      <h3>Удалённый Docker</h3>
-      <p class="hint">
-        Revit Server можно запускать на другом компьютере или сервере. Добавьте его как docker-контекст
-        и выберите этот контекст в поле «Контекст Windows-контейнеров». Адрес: <code>ssh://пользователь@сервер</code>
-        (нужен вход по ключу, на сервере должен быть docker) или <code>tcp://сервер:2376</code>.
-        Папку моделей для такой версии укажите полным путём на сервере, например <code>D:\RevitServerData\rs2022</code>,
-        и создайте её там заранее: Docker для Windows сам её не создаёт.
-      </p>
+      <h3 data-i18n="settings.remote"></h3>
+      <p class="hint" data-i18n-html="settings.remoteHint"></p>
       <div class="form-row">
-        <label>Имя нового контекста
-          <input type="text" id="remote-name" class="input-wide" placeholder="revit-server">
+        <label><span data-i18n="settings.remoteName"></span>
+          <input type="text" id="remote-name" class="input-wide" data-i18n-placeholder="settings.remoteNamePlaceholder">
         </label>
-        <label>Адрес
-          <input type="text" id="remote-endpoint" class="input-wide" placeholder="ssh://пользователь@сервер">
+        <label><span data-i18n="settings.remoteEndpoint"></span>
+          <input type="text" id="remote-endpoint" class="input-wide" data-i18n-placeholder="settings.remoteEndpointPlaceholder">
         </label>
-        <button type="button" class="btn btn-small" id="btn-add-context">Добавить контекст</button>
+        <button type="button" class="btn btn-small" id="btn-add-context" data-i18n="settings.addContext"></button>
       </div>
-      <p class="hint">
-        Адрес компьютера для ссылок и прокси определяется по контексту (для ssh-алиаса берётся настоящее имя
-        из <code>~/.ssh/config</code>). Укажите его здесь, только если это определилось неверно.
-      </p>
+      <p class="hint" data-i18n-html="settings.hostHint"></p>
       <div class="form-row">
-        <label>Адрес Windows-сервера
+        <label><span data-i18n="settings.windowsHost"></span>
           <input type="text" id="windows-host" class="input-wide">
         </label>
-        <label>Адрес Linux-движка (прокси)
+        <label><span data-i18n="settings.proxyHost"></span>
           <input type="text" id="proxy-host" class="input-wide">
         </label>
       </div>
 
-      <h3>Панель</h3>
+      <h3 data-i18n="settings.panel"></h3>
       <div class="form-row">
-        <label>Порт панели
+        <label><span data-i18n="settings.panelPort"></span>
           <input type="number" id="panel-port" min="1" max="65535" class="input-narrow">
         </label>
         <label class="check">
           <input type="checkbox" id="auto-open">
-          <span>Открывать браузер при запуске</span>
+          <span data-i18n="settings.autoOpen"></span>
         </label>
       </div>
     </div>
@@ -147,8 +133,8 @@
     <div class="modal-foot">
       <span class="muted" id="settings-note"></span>
       <div>
-        <button type="button" class="btn btn-ghost" id="btn-cancel-settings">Отмена</button>
-        <button type="button" class="btn btn-primary" id="btn-save-settings">Сохранить</button>
+        <button type="button" class="btn btn-ghost" id="btn-cancel-settings" data-i18n="settings.cancel"></button>
+        <button type="button" class="btn btn-primary" id="btn-save-settings" data-i18n="settings.save"></button>
       </div>
     </div>
   </div>

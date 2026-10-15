@@ -45,11 +45,18 @@ $script:ComposeDir = Join-Path $script:RuntimeDir 'compose'
 $script:ConfigPath = Join-Path $script:RuntimeDir 'panel.config.json'
 
 . (Join-Path $script:PanelRoot 'lib\Common.ps1')
+. (Join-Path $script:PanelRoot 'lib\I18n.ps1')
 . (Join-Path $script:PanelRoot 'lib\Config.ps1')
 . (Join-Path $script:PanelRoot 'lib\Compose.ps1')
 . (Join-Path $script:PanelRoot 'lib\Docker.ps1')
 . (Join-Path $script:PanelRoot 'lib\Jobs.ps1')
 . (Join-Path $script:PanelRoot 'lib\Actions.ps1')
+
+Initialize-I18n -Directory (Join-Path $script:WwwRoot 'i18n')
+# The console speaks the language of Windows; a request is answered in the
+# language the page asks for (X-Panel-Lang).
+$script:ConsoleLanguage = Resolve-Language (Get-UICulture).Name
+$script:Language = $script:ConsoleLanguage
 
 foreach ($dir in @($script:RuntimeDir, $script:ComposeDir)) {
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
@@ -62,6 +69,7 @@ Remove-OldJobs
 
 $script:Running = $true
 $script:StatusCache = $null
+$script:StatusCacheLanguage = ''
 $script:StatusCacheAt = [datetime]::MinValue
 $script:StatusCacheTtl = [timespan]::FromSeconds(2.5)
 
@@ -197,12 +205,14 @@ function Get-CachedStatus {
     param([switch]$Force)
 
     $age = (Get-Date) - $script:StatusCacheAt
-    if (-not $Force -and $script:StatusCache -and $age -lt $script:StatusCacheTtl) {
+    # The status holds texts, so a cached one only serves the language it was made in.
+    if (-not $Force -and $script:StatusCache -and $script:StatusCacheLanguage -eq $script:Language -and $age -lt $script:StatusCacheTtl) {
         return $script:StatusCache
     }
 
     $status = Get-PanelStatus -Config $script:Config -RepoRoot $script:RepoRoot
     $script:StatusCache = $status
+    $script:StatusCacheLanguage = $script:Language
     $script:StatusCacheAt = Get-Date
     return $status
 }
@@ -245,7 +255,8 @@ function Invoke-HealthRequest {
 function Invoke-ConfigGet {
     param($Context)
 
-    $contexts = Get-DockerContextNames
+    # @(): a single context would otherwise be sent as a string, not as a list.
+    $contexts = @(Get-DockerContextNames)
     # What the contexts point at, so the settings can show it next to the
     # address override fields.
     $windowsEngine = Get-EngineInfo -Context ([string]$script:Config.windowsContext)
@@ -267,7 +278,7 @@ function Invoke-ContextCreate {
     param($Context, $Body)
 
     if (-not $Body -or -not $Body.name -or -not $Body.endpoint) {
-        Send-Error -Context $Context -Message 'Нужно указать имя контекста и адрес.'
+        Send-Error -Context $Context -Message (T 'srv.needContext')
         return
     }
 
@@ -278,14 +289,14 @@ function Invoke-ContextCreate {
     }
 
     $script:StatusCache = $null
-    Send-Json -Context $Context -Data ([pscustomobject]@{ ok = $true; contexts = (Get-DockerContextNames) })
+    Send-Json -Context $Context -Data ([pscustomobject]@{ ok = $true; contexts = @(Get-DockerContextNames) })
 }
 
 function Invoke-ConfigPost {
     param($Context, $Body)
 
     if (-not $Body) {
-        Send-Error -Context $Context -Message 'Пустое тело запроса.'
+        Send-Error -Context $Context -Message (T 'srv.emptyBody')
         return
     }
 
@@ -312,14 +323,13 @@ function Invoke-ConfigPost {
             $_.enabled -and -not (Test-RemoteDataDir -Path ([string]$_.dataDir) -RepoRoot $script:RepoRoot)
         } | ForEach-Object { $_.year })
         if ($local.Count -gt 0) {
-            $notes += ("Docker работает на другом компьютере ($($engine.Host)): для версий $($local -join ', ') укажите папку моделей " +
-                'полным путём на нём, например D:\RevitServerData\rs2022, иначе их нельзя будет запустить. Папку нужно создать на сервере заранее.')
+            $notes += (T 'srv.remoteDirs' $engine.Host ($local -join ', '))
         }
     }
     if ($portChanged) {
-        $notes += 'Порт панели изменён — он вступит в силу после перезапуска панели.'
+        $notes += (T 'srv.portChanged')
     }
-    $notes += 'Изменения портов и папок применяются к контейнеру при следующем запуске (кнопка «Перезапустить» или «Запустить»).'
+    $notes += (T 'srv.applyNote')
 
     Send-Json -Context $Context -Data ([pscustomobject]@{
         ok      = $true
@@ -333,7 +343,7 @@ function Invoke-ActionPost {
     param($Context, $Body)
 
     if (-not $Body -or -not $Body.target -or -not $Body.action) {
-        Send-Error -Context $Context -Message 'Нужно указать target и action.'
+        Send-Error -Context $Context -Message (T 'srv.needTargetAction')
         return
     }
 
@@ -346,7 +356,7 @@ function Invoke-ActionPost {
         if ($action -eq 'up') { $results = Invoke-StartAll -Config $script:Config -ComposeDir $script:ComposeDir -RepoRoot $script:RepoRoot }
         elseif ($action -eq 'stop') { $results = Invoke-StopAll -Config $script:Config -ComposeDir $script:ComposeDir }
         else {
-            Send-Error -Context $Context -Message "Для «все» поддерживаются только up и stop."
+            Send-Error -Context $Context -Message (T 'srv.allActions')
             return
         }
         Send-Json -Context $Context -Data ([pscustomobject]@{ ok = $true; results = $results })
@@ -377,7 +387,7 @@ function Invoke-ActionPost {
         return
     }
 
-    Send-Error -Context $Context -Message "Неизвестная цель: $target"
+    Send-Error -Context $Context -Message (T 'srv.unknownTarget' $target)
 }
 
 function Invoke-JobsRequest {
@@ -406,7 +416,7 @@ function Invoke-JobLogRequest {
 
     $id = [string]$Query['id']
     if ([string]::IsNullOrWhiteSpace($id) -or $id -notmatch '^[0-9a-f]{12}$') {
-        Send-Error -Context $Context -Message 'Некорректный идентификатор задачи.'
+        Send-Error -Context $Context -Message (T 'srv.badJobId')
         return
     }
 
@@ -416,7 +426,7 @@ function Invoke-JobLogRequest {
     Update-JobStates | Out-Null
     $job = Get-PanelJob -Id $id
     if (-not $job) {
-        Send-Error -Context $Context -Message 'Задача не найдена.' -StatusCode 404
+        Send-Error -Context $Context -Message (T 'srv.jobNotFound') -StatusCode 404
         return
     }
 
@@ -437,7 +447,7 @@ function Invoke-JobCancel {
     param($Context, $Body)
 
     if (-not $Body -or -not $Body.id) {
-        Send-Error -Context $Context -Message 'Не указан идентификатор задачи.'
+        Send-Error -Context $Context -Message (T 'srv.noJobId')
         return
     }
     $stopped = Stop-PanelJob -Id ([string]$Body.id)
@@ -451,9 +461,10 @@ function Invoke-Request {
     $request = $Context.Request
     $path = $request.Url.AbsolutePath
     $method = $request.HttpMethod
+    $script:Language = Resolve-Language ([string]$request.Headers['X-Panel-Lang'])
 
     if (-not (Test-LocalHost -Request $request)) {
-        Send-Text -Context $Context -Text 'Панель принимает запросы только с localhost.' -StatusCode 403
+        Send-Text -Context $Context -Text (T 'srv.localOnly') -StatusCode 403
         return
     }
 
@@ -465,7 +476,7 @@ function Invoke-Request {
     }
 
     if (-not (Test-ApiAuthorized -Request $request)) {
-        Send-Error -Context $Context -Message 'Недействительный токен сессии. Обновите страницу панели.' -StatusCode 401
+        Send-Error -Context $Context -Message (T 'srv.badToken') -StatusCode 401
         return
     }
 
@@ -491,7 +502,7 @@ function Invoke-Request {
             return
         }
         default {
-            Send-Error -Context $Context -Message "Неизвестный метод API: $path" -StatusCode 404
+            Send-Error -Context $Context -Message (T 'srv.unknownApi' $path) -StatusCode 404
         }
     }
 }
@@ -522,8 +533,8 @@ if ($Port -gt 0) { $preferred = $Port }
 $started = Start-PanelListener -PreferredPort $preferred
 if (-not $started) {
     Write-Host ''
-    Write-Host "Не удалось занять порт $preferred (и 9 следующих)." -ForegroundColor Red
-    Write-Host 'Закройте программу, которая его использует, или задайте другой порт:' -ForegroundColor Red
+    Write-Host (T 'console.portBusy' $preferred) -ForegroundColor Red
+    Write-Host (T 'console.portHint') -ForegroundColor Red
     Write-Host '    powershell -ExecutionPolicy Bypass -File panel\server.ps1 -Port 9000'
     exit 1
 }
@@ -532,14 +543,14 @@ $listener = $started.Listener
 $url = "http://localhost:$($started.Port)/"
 
 Write-Host ''
-Write-Host '  Revit Server Stack: панель управления' -ForegroundColor Cyan
+Write-Host ('  ' + (T 'console.title')) -ForegroundColor Cyan
 Write-Host "  $url" -ForegroundColor Green
 Write-Host ''
-Write-Host "  Проект:        $script:RepoRoot"
-Write-Host "  Настройки:     $script:ConfigPath"
-Write-Host "  Compose-файлы: $script:ComposeDir"
+Write-Host ('  {0,-16}{1}' -f (T 'console.project'), $script:RepoRoot)
+Write-Host ('  {0,-16}{1}' -f (T 'console.settings'), $script:ConfigPath)
+Write-Host ('  {0,-16}{1}' -f (T 'console.compose'), $script:ComposeDir)
 Write-Host ''
-Write-Host '  Закрыть панель: Ctrl+C в этом окне (контейнеры продолжат работать).' -ForegroundColor DarkGray
+Write-Host ('  ' + (T 'console.stop')) -ForegroundColor DarkGray
 Write-Host ''
 
 if ($UrlFile) { Write-TextFileUtf8 -Path $UrlFile -Content $url }
@@ -568,8 +579,10 @@ try {
         try {
             Invoke-Request -Context $context
         } catch {
-            Write-Host "Ошибка обработки запроса: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host (T 'console.requestError' $_.Exception.Message) -ForegroundColor Red
             try { Send-Error -Context $context -Message $_.Exception.Message -StatusCode 500 } catch { }
+        } finally {
+            $script:Language = $script:ConsoleLanguage
         }
     }
 } finally {
@@ -577,5 +590,5 @@ try {
     try { $listener.Close() } catch { }
     if ($UrlFile) { Remove-Item -LiteralPath $UrlFile -Force -ErrorAction SilentlyContinue }
     Write-Host ''
-    Write-Host 'Панель остановлена. Запущенные контейнеры продолжают работать.' -ForegroundColor DarkGray
+    Write-Host (T 'console.stopped') -ForegroundColor DarkGray
 }

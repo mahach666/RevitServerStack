@@ -27,8 +27,8 @@ The Dockerfiles for Revit Server 2020 to 2025 come from [dosymep/revit-server-do
 ## Quick start
 
 1. Download `RevitServerStack-<version>.zip` from the [Releases](../../releases) page and unpack it. The folder keeps your settings and, by default, the models (`samples\rs<year>`), so unpack it on a disk with enough free space.
-2. Run `RevitServerStack.exe`. An icon appears in the notification area and the panel opens in the browser at `http://localhost:8787/`. The icon menu has «Открыть панель» (open the panel), «Журнал запуска» (startup log) and «Выход» (exit). Exit stops the panel, not the containers.
-3. Find the card of the version you need and press «Собрать и запустить» (build and start). The output of the build is shown live.
+2. Run `RevitServerStack.exe`. An icon appears in the notification area and the panel opens in the browser at `http://localhost:8787/`. The icon menu has "Open the panel", "Startup log" and "Exit". Exit stops the panel, not the containers.
+3. Find the card of the version you need and press "Build and start". The output of the build is shown live.
 4. When the card shows that the version is running, open the admin page:
    - through the proxy: `http://localhost/RevitServerAdmin2022/`
    - directly: `http://localhost:2022/RevitServerAdmin2022/`
@@ -44,14 +44,12 @@ Without the exe: run `Start-Panel.cmd` from a clone of the repository (the same 
 
 Revit talks to Revit Server over WCF net.tcp on port 808, not over HTTP. In Revit, enter the name or IP address of this machine as the server, without a port.
 
-Port 808 is fixed by the protocol, so only one version can publish it. Open Settings in the panel, tick «порт 808 для Revit» for the version your Revit clients use, save, and restart that version. Without it Revit fails with "TCP 10061, connection refused", even though the admin page opens fine.
+Port 808 is fixed by the protocol, so only one version can publish it. Open Settings in the panel, tick "port 808 for Revit" for the version your Revit clients use, save, and restart that version. Without it Revit fails with "TCP 10061, connection refused", even though the admin page opens fine.
 
 ## Control panel
 
-The panel UI is in Russian.
-
 - State of Docker Desktop, the Windows engine and the Linux engine.
-- Start, stop, restart, rebuild and remove the container of each version, plus the proxy. «Запустить всё» and «Остановить всё» act on everything at once.
+- Start, stop, restart, rebuild and remove the container of each version, plus the proxy. "Start all" and "Stop all" act on everything at once.
 - Whether the image is built and whether the admin page really answers. A running container does not mean IIS has started yet.
 - Live docker output for every operation and a job history. A build keeps running if you close the panel and open it again.
 - Settings: host port and models folder per version, which versions the proxy routes, proxy port, docker contexts (including [Docker on another computer](#docker-on-another-computer)), panel port.
@@ -59,6 +57,12 @@ The panel UI is in Russian.
 Settings are saved to `panel/runtime/panel.config.json`. The panel writes the compose files and `nginx.conf` it runs into `panel/runtime/compose/`. This folder is ignored by git, and the files in `samples/` stay untouched.
 
 Names the panel uses: compose project `samples`, images `samples-rs<year>`, containers `rs<year>` and `revit-proxy`. Docker builds the images again if the project name changes, so leave it as it is unless you have a reason.
+
+### Languages
+
+The panel and the menu of the tray icon speak English, Russian, German, French, Spanish, Brazilian Portuguese, Simplified Chinese and Japanese. The panel starts in the language of the browser and falls back to English when it does not have that language. The selector in the header of the panel changes the language, and the choice is remembered in the browser. The statuses and error messages that the panel sends follow the selected language, and its console window and the tray menu follow the language of Windows. The names of buttons and settings in this document are the English ones.
+
+English and Russian are the reference texts. The other translations were not checked by native speakers, and corrections are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md#translations).
 
 ### Models
 
@@ -91,15 +95,15 @@ Replace `up -d --build` with `stop` or `down` to stop or remove. The samples pub
 The Revit Server containers can run on a server or on another PC while the panel stays on yours. The panel drives Docker through docker contexts, so any engine docker can reach works.
 
 1. On the server you need a Docker Engine that runs Windows containers and, for an `ssh://` address, an SSH server with your key in `authorized_keys`. The docker CLI must be installed there too: an `ssh://` context runs `docker system dial-stdio` on the server.
-2. Open Settings, the section «Удалённый Docker». Enter a name and an address, either `ssh://user@server` (or an alias from `~/.ssh/config`) or `tcp://server:2376`, and press «Добавить контекст». In a terminal the same is `docker context create revit-server --docker "host=ssh://user@server"`. A TLS context needs certificates, create it with the docker CLI.
-3. Choose the new context in «Контекст Windows-контейнеров». For every version you run, set the models folder to a full path on the server, for example `D:\RevitServerData\rs2022`. Create the folder on the server beforehand: the Docker engine for Windows does not create a missing folder. The panel does not create it from your machine and refuses to start a version whose folder is not such a path.
+2. Open Settings, the section "Remote Docker". Enter a name and an address, either `ssh://user@server` (or an alias from `~/.ssh/config`) or `tcp://server:2376`, and press "Add context". In a terminal the same is `docker context create revit-server --docker "host=ssh://user@server"`. A TLS context needs certificates, create it with the docker CLI.
+3. Choose the new context in "Windows containers context". For every version you run, set the models folder to a full path on the server, for example `D:\RevitServerData\rs2022`. Create the folder on the server beforehand: the Docker engine for Windows does not create a missing folder. The panel does not create it from your machine and refuses to start a version whose folder is not such a path.
 4. Open the ports of the versions you use in the firewall of the server (the year of the version by default, for example 2022), and port 808 for the version that serves Revit clients.
 
 What changes with a remote engine:
 
 - The images are built on the server: the build context is sent there and the server downloads the installers.
-- Links, the «Открыть» button and the readiness checks use the address of the server, taken from the context. For an ssh alias the real host name comes from `ssh -G`. If the address is wrong, set «Адрес Windows-сервера» in Settings.
-- The proxy needs a Linux engine, and a Windows server usually has none. Keep the proxy on another engine, for example your own Docker Desktop (leave «Контекст прокси» as it is): nginx is pointed at the server automatically. The proxy may also run on a remote Linux engine: put its context into «Контекст прокси». Its nginx.conf is passed inside the container, nothing is mounted from your machine. Or do without the proxy and open the versions by port.
+- Links, the "Open" button and the readiness checks use the address of the server, taken from the context. For an ssh alias the real host name comes from `ssh -G`. If the address is wrong, set "Windows server address" in Settings.
+- The proxy needs a Linux engine, and a Windows server usually has none. Keep the proxy on another engine, for example your own Docker Desktop (leave "Proxy context (Linux)" as it is): nginx is pointed at the server automatically. The proxy may also run on a remote Linux engine: put its context into "Proxy context (Linux)". Its nginx.conf is passed inside the container, nothing is mounted from your machine. Or do without the proxy and open the versions by port.
 - The Docker Desktop indicator and its buttons disappear when no engine is on your machine.
 
 The panel runs docker without a keyboard: it cannot type a password or confirm an unknown host key. Connect once with `ssh user@server` in a terminal, and use a key without a passphrase or load it into `ssh-agent`. A `tcp://` engine without TLS gives everyone on the network full control of the server, so prefer `ssh://` or TLS.
@@ -129,7 +133,7 @@ Start-Panel.cmd           starts the panel in a console window
 
 - The panel says the Windows engine is unavailable: press the button next to the message, or run `"%ProgramFiles%\Docker\Docker\DockerCli.exe" -SwitchWindowsEngine`.
 - The build fails while downloading the installer: Autodesk has moved the file. Put the new link into the `ADD` line of `src/rs<year>/Dockerfile`. On 2026-10-15 the links of all eight versions answered with HTTP 200. For 2026 the file name carries the update number (`Revit_Server_2026_4_win_db.sfx.exe` is update 2026.4), so a newer update means a new link.
-- The card says "running, web not answering yet": IIS inside the container is still starting. Wait and the state changes by itself.
+- The card says "Running, the web page does not answer yet": IIS inside the container is still starting. Wait and the state changes by itself.
 - A remote engine shows as unavailable: run `docker --context <name> ps` in a terminal. If it asks for a password or a host key, or says the connection is refused, the panel cannot work either until that is fixed there.
 - Port 808 or 80 is busy: change the proxy port in Settings. Port 808 cannot be changed, so stop the program that holds it.
 

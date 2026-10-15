@@ -49,11 +49,11 @@ function Get-ContainerMap {
         -DockerArgs @('ps', '-a', '--no-trunc', '--format', '{{json .}}')
 
     if ($run.TimedOut) {
-        $result.Error = "Docker не ответил за $TimeoutSec с — движок недоступен или запускается."
+        $result.Error = (T 'docker.timeout' $TimeoutSec)
         return $result
     }
     if (-not $run.Launched) {
-        $result.Error = 'Не найден docker CLI. Установите Docker Desktop и убедитесь, что docker есть в PATH.'
+        $result.Error = (T 'docker.notFound')
         return $result
     }
     if ($run.ExitCode -ne 0) {
@@ -221,22 +221,22 @@ function New-RemoteContext {
     param([string]$Name, [string]$Endpoint)
 
     if (-not (Test-ContextName $Name)) {
-        return [pscustomobject]@{ ok = $false; error = 'Имя контекста: латинские буквы, цифры, «-», «_», «.» и «+», начинаться должно с буквы или цифры.' }
+        return [pscustomobject]@{ ok = $false; error = (T 'ctx.badName') }
     }
     if (-not (Test-ContextEndpoint $Endpoint)) {
-        return [pscustomobject]@{ ok = $false; error = 'Адрес: ssh://пользователь@сервер (или ssh://алиас из ~/.ssh/config) либо tcp://сервер:2376.' }
+        return [pscustomobject]@{ ok = $false; error = (T 'ctx.badEndpoint') }
     }
 
     $run = Invoke-Cli -FilePath 'docker' -TimeoutSec 20 `
         -Arguments @('context', 'create', $Name, '--docker', "host=$Endpoint")
     if (-not $run.Launched) {
-        return [pscustomobject]@{ ok = $false; error = 'Не найден docker CLI. Установите Docker и убедитесь, что docker есть в PATH.' }
+        return [pscustomobject]@{ ok = $false; error = (T 'docker.notFound') }
     }
     if ($run.TimedOut -or $run.ExitCode -ne 0) {
         $message = $run.StdErr
         if ([string]::IsNullOrWhiteSpace($message)) { $message = $run.StdOut }
         $first = ($message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
-        if (-not $first) { $first = 'docker context create не выполнился.' }
+        if (-not $first) { $first = (T 'ctx.failed') }
         return [pscustomobject]@{ ok = $false; error = [string]$first }
     }
 
@@ -318,7 +318,7 @@ function Get-PanelStatus {
         $imageName = "$project-rs${year}:latest"
 
         $state = 'absent'
-        $statusText = 'Контейнер не создан'
+        $statusText = (T 'status.absent')
         $ports = ''
         if ($windows.Reachable -and $windows.Containers.ContainsKey($containerName)) {
             $container = $windows.Containers[$containerName]
@@ -329,7 +329,7 @@ function Get-PanelStatus {
             }
         } elseif (-not $windows.Reachable) {
             $state = 'unknown'
-            $statusText = 'Движок Windows-контейнеров недоступен'
+            $statusText = (T 'status.windowsEngineDown')
         }
 
         $servesRevit = $false
@@ -361,14 +361,14 @@ function Get-PanelStatus {
     }
 
     $proxyState = 'absent'
-    $proxyStatusText = 'Контейнер не создан'
+    $proxyStatusText = (T 'status.absent')
     if ($proxyEngine.Reachable -and $proxyEngine.Containers.ContainsKey('revit-proxy')) {
         $container = $proxyEngine.Containers['revit-proxy']
         $proxyState = ConvertTo-UiState ([string]$container.State)
         $proxyStatusText = [string]$container.Status
     } elseif (-not $proxyEngine.Reachable) {
         $proxyState = 'unknown'
-        $proxyStatusText = 'Linux-движок недоступен'
+        $proxyStatusText = (T 'status.linuxEngineDown')
     }
 
     return [pscustomobject]@{

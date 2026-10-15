@@ -2,7 +2,7 @@
 
 /* Revit Server Stack control panel, front-end.
    No dependencies: the panel must run from a plain file server with no
-   network access and no npm install. */
+   network access and no npm install. All texts live in i18n/<language>.json. */
 
 const TOKEN = document.querySelector('meta[name="panel-token"]').content;
 
@@ -12,6 +12,7 @@ const state = {
   healthLoaded: false,
   config: null,
   contexts: [],
+  engines: null,
   panel: null,
   runningJobs: [],
   activeJobId: null,
@@ -23,26 +24,108 @@ const state = {
   logTimer: null,
 };
 
-const STATE_LABEL = {
-  running: 'Работает',
-  starting: 'Запускается',
-  stopped: 'Остановлен',
-  absent: 'Не создан',
-  error: 'Ошибка',
-  unknown: 'Неизвестно',
-};
-
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value === undefined || value === null ? '' : value)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+/* ----------------------------------------------------------------- i18n -- */
+
+const i18n = { languages: [], code: 'en', texts: {}, fallback: {} };
+
+// The text of a key in the current language, with {0}, {1} ... filled in.
+// English stands in for a missing key, and the key itself for a missing catalog.
+function t(key, ...args) {
+  const has = (catalog) => Object.prototype.hasOwnProperty.call(catalog, key);
+  let text = key;
+  if (has(i18n.texts)) text = i18n.texts[key];
+  else if (has(i18n.fallback)) text = i18n.fallback[key];
+  return text.replace(/\{(\d+)\}/g, (whole, index) => (args[Number(index)] === undefined ? whole : String(args[Number(index)])));
+}
+
+// "pt-PT" gives "pt-BR", "zh-TW" gives "zh-CN", an unknown language gives null.
+function matchLanguage(name) {
+  if (!name) return null;
+  const wanted = String(name).toLowerCase();
+  const exact = i18n.languages.find((item) => item.code.toLowerCase() === wanted);
+  if (exact) return exact.code;
+  const base = wanted.split('-')[0];
+  const found = i18n.languages.find((item) => item.code.toLowerCase() === base)
+    || i18n.languages.find((item) => item.code.toLowerCase().split('-')[0] === base);
+  return found ? found.code : null;
+}
+
+// What the user chose before, else what the browser asks for, else English.
+function pickLanguage() {
+  let saved = null;
+  try { saved = window.localStorage.getItem('rss-lang'); } catch (err) { /* storage can be blocked */ }
+  const asked = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language];
+  for (const name of [saved].concat(Array.from(asked))) {
+    const code = matchLanguage(name);
+    if (code) return code;
+  }
+  return 'en';
+}
+
+async function loadCatalog(code) {
+  const response = await fetch(`i18n/${encodeURIComponent(code)}.json`, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`i18n/${code}.json: HTTP ${response.status}`);
+  return response.json();
+}
+
+// Fills every element that carries a data-i18n* attribute. The "html" variant
+// is for catalog text with markup (<code>), never for data from the server.
+function applyStaticTexts() {
+  document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-html]').forEach((el) => { el.innerHTML = t(el.dataset.i18nHtml); });
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
+  document.querySelectorAll('[data-i18n-aria-label]').forEach((el) => { el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel)); });
+  if (!state.activeJobId) $('log-title').textContent = t('log.hint');
+  renderFooter();
+}
+
+async function setLanguage(code, remember) {
+  let texts = i18n.fallback;
+  if (code !== 'en') {
+    try {
+      texts = await loadCatalog(code);
+    } catch (err) {
+      code = 'en'; // a broken install must not leave the panel without texts
+    }
+  }
+  i18n.code = code;
+  i18n.texts = texts;
+  document.documentElement.lang = code;
+  $('lang').value = code;
+  if (remember) {
+    try { window.localStorage.setItem('rss-lang', code); } catch (err) { /* storage can be blocked */ }
+  }
+  applyStaticTexts();
+  // The server words its messages in the language of the request, so the
+  // status is fetched again rather than translated here.
+  if (state.status) refreshStatus();
+}
+
+async function initLanguage() {
+  const index = await fetch('i18n/index.json', { cache: 'no-store' });
+  i18n.languages = await index.json();
+  i18n.fallback = await loadCatalog('en');
+
+  const select = $('lang');
+  select.innerHTML = i18n.languages
+    .map((item) => `<option value="${esc(item.code)}">${esc(item.name)}</option>`).join('');
+  select.onchange = () => setLanguage(select.value, true);
+
+  await setLanguage(pickLanguage(), false);
+}
 
 /* ------------------------------------------------------------------ api -- */
 
 async function api(path, options = {}) {
   const init = {
     method: options.method || 'GET',
-    headers: { 'X-Panel-Token': TOKEN },
+    headers: { 'X-Panel-Token': TOKEN, 'X-Panel-Lang': i18n.code },
   };
   if (options.body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
@@ -53,14 +136,14 @@ async function api(path, options = {}) {
   try {
     response = await fetch(path, init);
   } catch (err) {
-    throw new Error('Панель недоступна — окно PowerShell закрыто?');
+    throw new Error(t('err.panelDown'));
   }
 
   let data = null;
   try {
     data = await response.json();
   } catch (err) {
-    throw new Error(`Некорректный ответ панели (HTTP ${response.status}).`);
+    throw new Error(t('err.badAnswer', response.status));
   }
   if (!response.ok && data && data.error) throw new Error(data.error);
   return data;
@@ -77,7 +160,7 @@ function alertBox(message, kind = 'info', autoHideMs = 0) {
   close.className = 'close';
   close.type = 'button';
   close.textContent = '×';
-  close.setAttribute('aria-label', 'Скрыть');
+  close.setAttribute('aria-label', t('alert.hide'));
   close.onclick = () => box.remove();
   box.appendChild(close);
 
@@ -108,7 +191,7 @@ async function runAction(target, action, confirmText) {
     } else if (result.ok && result.jobId) {
       attachToJob(result.jobId);
     } else if (!result.ok) {
-      alertBox(result.error || 'Не удалось выполнить операцию.', 'error', 9000);
+      alertBox(result.error || t('err.operationFailed'), 'error', 9000);
       if (result.jobId) attachToJob(result.jobId);
     }
   } catch (err) {
@@ -163,22 +246,18 @@ async function pollLog() {
 }
 
 function appendFinishNote(data) {
-  let note;
-  if (data.finishedReason === 'cancelled') {
-    note = '\n— операция прервана пользователем —\n';
-  } else if (data.finishedReason === 'detached') {
-    note = '\n— процесс завершился, пока панель была перезапущена; код возврата неизвестен, см. вывод выше —\n';
-  } else if (data.exitCode === 0) {
-    note = '\n— готово (код возврата 0) —\n';
-  } else if (data.exitCode === null || data.exitCode === undefined) {
-    note = '\n— завершено, код возврата неизвестен —\n';
-  } else {
-    note = `\n— ошибка: код возврата ${data.exitCode} —\n`;
-  }
+  let key;
+  if (data.finishedReason === 'cancelled') key = 'jobnote.cancelled';
+  else if (data.finishedReason === 'detached') key = 'jobnote.detached';
+  else if (data.exitCode === 0) key = 'jobnote.done';
+  else if (data.exitCode === null || data.exitCode === undefined) key = 'jobnote.unknown';
+  else key = 'jobnote.failed';
+  let note = `\n--- ${t(key, data.exitCode)} ---\n`;
+
   const logEl = $('log');
   // The Windows engine does not create a missing bind source, and the daemon's own wording is easy to misread.
   if (data.exitCode && logEl.textContent.indexOf('bind source path does not exist') >= 0) {
-    note += 'Папка моделей не найдена на машине, где работает Docker. Docker для Windows сам её не создаёт: создайте папку и запустите версию снова.\n';
+    note += `${t('jobnote.bindMissing')}\n`;
   }
   logEl.textContent += note;
   logEl.scrollTop = logEl.scrollHeight;
@@ -218,7 +297,7 @@ function renderEngines() {
     if (status.dockerDesktop) {
       host.appendChild(pill('Docker Desktop', 'ok'));
     } else {
-      host.appendChild(pill('Docker Desktop не запущен', 'bad', 'запустить',
+      host.appendChild(pill(t('engine.desktopDown'), 'bad', t('engine.start'),
         () => runAction('engine', 'start-desktop')));
     }
   }
@@ -228,28 +307,28 @@ function renderEngines() {
   const win = status.windowsEngine;
   const winName = win.remote ? `${win.host}, ${win.context}` : win.context;
   if (win.reachable) {
-    host.appendChild(pill(`Windows-движок (${winName})`, 'ok'));
+    host.appendChild(pill(t('engine.windowsOk', winName), 'ok'));
   } else {
-    host.appendChild(pill(`Windows-движок недоступен (${winName}): ${win.error || ''}`, 'bad',
-      win.remote ? null : 'переключить', win.remote ? null : () => runAction('engine', 'switch-windows')));
+    host.appendChild(pill(t('engine.windowsDown', winName, win.error || ''), 'bad',
+      win.remote ? null : t('engine.switch'), win.remote ? null : () => runAction('engine', 'switch-windows')));
   }
   if (win.hostInvalid) {
-    host.appendChild(pill('Адрес Windows-сервера не определён, укажите его в настройках', 'warn'));
+    host.appendChild(pill(t('engine.windowsHostInvalid'), 'warn'));
   }
 
   const proxyEngine = status.proxyEngine;
-  const proxyContextName = proxyEngine.context || 'текущий';
+  const proxyContextName = proxyEngine.context || t('engine.currentContext');
   const proxyName = proxyEngine.remote ? `${proxyEngine.host}, ${proxyContextName}` : proxyContextName;
   if (proxyEngine.reachable) {
-    host.appendChild(pill(`Linux-движок (${proxyName})`, 'ok'));
+    host.appendChild(pill(t('engine.linuxOk', proxyName), 'ok'));
   } else {
-    host.appendChild(pill(`Linux-движок недоступен (${proxyName})`, 'warn'));
+    host.appendChild(pill(t('engine.linuxDown', proxyName), 'warn'));
   }
   if (proxyEngine.hostInvalid) {
-    host.appendChild(pill('Адрес Linux-движка не определён, укажите его в настройках', 'warn'));
+    host.appendChild(pill(t('engine.linuxHostInvalid'), 'warn'));
   }
 
-  host.appendChild(pill(`Обновлено ${status.checkedAt}`, 'idle', 'обновить', refreshStatus));
+  host.appendChild(pill(t('engine.updated', status.checkedAt), 'idle', t('engine.refresh'), refreshStatus));
 }
 
 function actionButton(label, handler, opts = {}) {
@@ -272,13 +351,13 @@ function renderVersionCard(version) {
   card.className = `card${version.enabled ? '' : ' disabled'}`;
 
   let stateKey = version.state;
-  let stateLabel = STATE_LABEL[stateKey] || stateKey;
+  let stateLabel = t(`state.${stateKey}`);
   // "Container up" is not "server ready": IIS inside needs a while to answer.
   // Only say so once a probe has actually run, or a freshly loaded page would
   // slander a perfectly healthy server.
   if (stateKey === 'running' && state.healthLoaded && health && !health.ready) {
     stateKey = 'starting';
-    stateLabel = 'Работает, веб ещё не отвечает';
+    stateLabel = t('state.runningNoWeb');
   }
 
   const head = document.createElement('div');
@@ -291,21 +370,23 @@ function renderVersionCard(version) {
   const meta = document.createElement('dl');
   meta.className = 'card-meta';
   const openUrl = pickOpenUrl(version);
+  let modelsNote = '';
+  if (state.status.windowsEngine.remote) {
+    modelsNote = version.dataDirOk
+      ? ` <span class="muted">${esc(t('card.onServer'))}</span>`
+      : ` <span class="warn-text">${esc(t('card.needServerPath', `D:\\RevitServerData\\rs${version.year}`))}</span>`;
+  }
   meta.innerHTML = `
-    <dt>Состояние</dt><dd>${esc(version.statusText)}</dd>
-    <dt>Порт</dt><dd>${esc(version.hostPort)}</dd>
-    <dt>Образ</dt><dd>${version.imageBuilt
+    <dt>${esc(t('card.state'))}</dt><dd>${esc(version.statusText)}</dd>
+    <dt>${esc(t('card.port'))}</dt><dd>${esc(version.hostPort)}</dd>
+    <dt>${esc(t('card.image'))}</dt><dd>${version.imageBuilt
       ? esc(version.imageName)
-      : '<span class="muted">не собран — первая сборка качает ~5 ГБ (20–45 мин)</span>'}</dd>
-    <dt>Модели</dt><dd>${esc(version.dataDir)}${state.status.windowsEngine.remote
-      ? (version.dataDirOk
-        ? ' <span class="muted">(на сервере)</span>'
-        : ' <span class="warn-text">(нужен полный путь на сервере, например D:\\RevitServerData\\rs' + esc(version.year) + ')</span>')
-      : ''}</dd>
-    <dt>Revit</dt><dd>${version.revitClients
-      ? 'порт 808 опубликован — клиенты Revit смогут подключиться'
-      : '<span class="warn-text">порт 808 не опубликован — Revit подключиться не сможет (включите в настройках)</span>'}</dd>
-    ${openUrl ? `<dt>Адрес</dt><dd><a class="link" href="${esc(openUrl)}" target="_blank" rel="noopener">${esc(openUrl)}</a></dd>` : ''}`;
+      : `<span class="muted">${esc(t('card.imageMissing'))}</span>`}</dd>
+    <dt>${esc(t('card.models'))}</dt><dd>${esc(version.dataDir)}${modelsNote}</dd>
+    <dt>${esc(t('card.revit'))}</dt><dd>${version.revitClients
+      ? esc(t('card.port808On'))
+      : `<span class="warn-text">${esc(t('card.port808Off'))}</span>`}</dd>
+    ${openUrl ? `<dt>${esc(t('card.address'))}</dt><dd><a class="link" href="${esc(openUrl)}" target="_blank" rel="noopener">${esc(openUrl)}</a></dd>` : ''}`;
   card.appendChild(meta);
 
   const actions = document.createElement('div');
@@ -314,32 +395,31 @@ function renderVersionCard(version) {
   const engineDown = !state.status.windowsEngine.reachable;
 
   if (version.state === 'running') {
-    actions.appendChild(actionButton('Остановить', () => runAction(target, 'stop'),
+    actions.appendChild(actionButton(t('btn.stop'), () => runAction(target, 'stop'),
       { disabled: busy || engineDown }));
-    actions.appendChild(actionButton('Перезапустить', () => runAction(target, 'restart'),
+    actions.appendChild(actionButton(t('btn.restart'), () => runAction(target, 'restart'),
       { disabled: busy || engineDown }));
   } else {
-    actions.appendChild(actionButton(version.imageBuilt ? 'Запустить' : 'Собрать и запустить',
+    actions.appendChild(actionButton(version.imageBuilt ? t('btn.start') : t('btn.buildStart'),
       () => {
         if (version.imageBuilt) return runAction(target, 'up');
-        return runAction(target, 'build',
-          `Образ Revit Server ${version.year} ещё не собран.\n\nСборка скачает около 5 ГБ и займёт 20–45 минут. Начать?`);
+        return runAction(target, 'build', t('confirm.build', version.year));
       },
       { disabled: busy || engineDown, className: 'btn-primary' }));
   }
 
-  actions.appendChild(actionButton('Пересобрать', () => runAction(target, 'build',
-    `Пересобрать образ Revit Server ${version.year}?\n\nЭто может занять 20–45 минут. Модели в папке с данными не затрагиваются.`),
+  actions.appendChild(actionButton(t('btn.rebuild'), () => runAction(target, 'build',
+    t('confirm.rebuild', version.year)),
     { disabled: busy || engineDown, title: 'docker compose up -d --build' }));
 
   if (version.state !== 'absent' && version.state !== 'unknown') {
-    actions.appendChild(actionButton('Удалить контейнер', () => runAction(target, 'down',
-      `Удалить контейнер rs${version.year}?\n\nМодели в папке ${version.dataDir} останутся на месте — удаляется только контейнер.`),
+    actions.appendChild(actionButton(t('btn.remove'), () => runAction(target, 'down',
+      t('confirm.remove', version.year, version.dataDir)),
       { disabled: busy || engineDown, className: 'btn-danger' }));
   }
 
   if (openUrl) {
-    actions.appendChild(actionButton('Открыть', () => window.open(openUrl, '_blank', 'noopener')));
+    actions.appendChild(actionButton(t('btn.open'), () => window.open(openUrl, '_blank', 'noopener')));
   }
 
   card.appendChild(actions);
@@ -362,39 +442,39 @@ function renderProxyCard() {
   card.className = `card proxy${proxy.enabled ? '' : ' disabled'}`;
 
   let stateKey = proxy.state;
-  let stateLabel = STATE_LABEL[stateKey] || stateKey;
+  let stateLabel = t(`state.${stateKey}`);
   if (stateKey === 'running' && state.healthLoaded && !state.health.proxy) {
     stateKey = 'starting';
-    stateLabel = 'Работает, веб ещё не отвечает';
+    stateLabel = t('state.runningNoWeb');
   }
 
   card.innerHTML = `
     <div class="card-head">
-      <div class="card-title">Обратный прокси</div>
+      <div class="card-title">${esc(t('card.proxyTitle'))}</div>
       <span class="badge ${esc(stateKey)}"><span class="dot"></span>${esc(stateLabel)}</span>
     </div>
     <dl class="card-meta">
-      <dt>Состояние</dt><dd>${esc(proxy.statusText)}</dd>
-      <dt>Порт</dt><dd>${esc(proxy.port)}</dd>
-      <dt>Назначение</dt><dd>Все версии на одном порту — в Revit можно подключаться по имени компьютера без порта</dd>
+      <dt>${esc(t('card.state'))}</dt><dd>${esc(proxy.statusText)}</dd>
+      <dt>${esc(t('card.port'))}</dt><dd>${esc(proxy.port)}</dd>
+      <dt></dt><dd>${esc(t('card.proxyPurpose'))}</dd>
     </dl>`;
 
   const actions = document.createElement('div');
   actions.className = 'card-actions';
 
   if (proxy.state === 'running') {
-    actions.appendChild(actionButton('Остановить', () => runAction('proxy', 'stop'), { disabled: busy || engineDown }));
-    actions.appendChild(actionButton('Перезапустить', () => runAction('proxy', 'restart'), { disabled: busy || engineDown }));
+    actions.appendChild(actionButton(t('btn.stop'), () => runAction('proxy', 'stop'), { disabled: busy || engineDown }));
+    actions.appendChild(actionButton(t('btn.restart'), () => runAction('proxy', 'restart'), { disabled: busy || engineDown }));
   } else {
-    actions.appendChild(actionButton('Запустить', () => runAction('proxy', 'up'),
+    actions.appendChild(actionButton(t('btn.start'), () => runAction('proxy', 'up'),
       { disabled: busy || engineDown, className: 'btn-primary' }));
   }
   if (proxy.state !== 'absent' && proxy.state !== 'unknown') {
-    actions.appendChild(actionButton('Удалить контейнер', () => runAction('proxy', 'down',
-      'Удалить контейнер revit-proxy?'), { disabled: busy || engineDown, className: 'btn-danger' }));
+    actions.appendChild(actionButton(t('btn.remove'), () => runAction('proxy', 'down',
+      t('confirm.removeProxy')), { disabled: busy || engineDown, className: 'btn-danger' }));
   }
   if (proxy.state === 'running') {
-    actions.appendChild(actionButton('Открыть', () => window.open(proxy.url, '_blank', 'noopener')));
+    actions.appendChild(actionButton(t('btn.open'), () => window.open(proxy.url, '_blank', 'noopener')));
   }
 
   card.appendChild(actions);
@@ -412,6 +492,10 @@ function renderCards() {
   host.innerHTML = '';
   state.status.versions.forEach((version) => host.appendChild(renderVersionCard(version)));
   host.appendChild(renderProxyCard());
+}
+
+function renderFooter() {
+  $('foot-info').textContent = state.panel ? t('foot.project', state.panel.repoRoot) : '';
 }
 
 function renderJobs(jobs) {
@@ -455,7 +539,7 @@ async function refreshStatus() {
     state.panel = data.panel;
     renderEngines();
     renderCards();
-    $('foot-info').textContent = `Проект: ${data.panel.repoRoot}`;
+    renderFooter();
   } catch (err) {
     $('engines').innerHTML = '';
     $('engines').appendChild(pill(err.message, 'bad'));
@@ -487,10 +571,10 @@ async function openSettings() {
     // Never open an unpopulated form: a blank dialog looks like real settings
     // and saving it would look like the user cleared everything.
     if (!data.config || !data.config.proxy || !Array.isArray(data.config.versions)) {
-      throw new Error('Панель вернула настройки в неожиданном виде. Перезапустите Start-Panel.cmd.');
+      throw new Error(t('settings.unexpected'));
     }
     state.config = data.config;
-    state.contexts = data.contexts || [];
+    state.contexts = Array.isArray(data.contexts) ? data.contexts : [];
     state.engines = data.engines || null;
     fillSettings();
     $('settings-modal').hidden = false;
@@ -512,15 +596,15 @@ function fillSettings() {
         <input type="checkbox" data-field="enabled" data-index="${index}" ${version.enabled ? 'checked' : ''}>
         <span>RS ${esc(version.year)}</span>
       </label>
-      <label>Порт
+      <label><span>${esc(t('settings.port'))}</span>
         <input type="number" min="1" max="65535" data-field="hostPort" data-index="${index}" value="${esc(version.hostPort)}">
       </label>
-      <label>Папка с моделями
+      <label><span>${esc(t('settings.dataDir'))}</span>
         <input type="text" data-field="dataDir" data-index="${index}" value="${esc(version.dataDir)}">
       </label>
-      <label class="check" title="Публикует порт 808 (net.tcp). Без него Revit не подключится. Порт фиксирован в протоколе, поэтому его может занимать только одна версия.">
+      <label class="check" title="${esc(t('settings.port808Hint'))}">
         <input type="checkbox" data-field="revitClients" data-index="${index}" ${version.revitClients ? 'checked' : ''}>
-        <span>порт&nbsp;808 для&nbsp;Revit</span>
+        <span>${esc(t('settings.port808'))}</span>
       </label>`;
     host.appendChild(row);
   });
@@ -534,8 +618,8 @@ function fillSettings() {
   $('windows-host').value = config.windowsHost || '';
   $('proxy-host').value = config.proxyHost || '';
   const engines = state.engines;
-  $('windows-host').placeholder = engines ? `по контексту: ${engines.windows.detectedHost}` : '';
-  $('proxy-host').placeholder = engines ? `по контексту: ${engines.proxy.detectedHost}` : '';
+  $('windows-host').placeholder = engines ? t('settings.detected', engines.windows.detectedHost) : '';
+  $('proxy-host').placeholder = engines ? t('settings.detected', engines.proxy.detectedHost) : '';
   $('remote-name').value = '';
   $('remote-endpoint').value = '';
   $('panel-port').value = config.panelPort;
@@ -573,57 +657,55 @@ function collectSettings() {
   return config;
 }
 
-async function saveSettings() {
+function showSettingsErrors(messages) {
   const errorsBox = $('settings-errors');
+  errorsBox.hidden = false;
+  errorsBox.innerHTML = `<ul>${messages.map((message) => `<li>${esc(message)}</li>`).join('')}</ul>`;
+}
+
+async function saveSettings() {
   if (!state.config) {
-    errorsBox.hidden = false;
-    errorsBox.innerHTML = '<ul><li>Настройки не загружены — сохранять нечего. Закройте окно и откройте его заново.</li></ul>';
+    showSettingsErrors([t('settings.notLoaded')]);
     return;
   }
   try {
     const data = await api('/api/config', { method: 'POST', body: collectSettings() });
     if (!data.ok) {
-      errorsBox.hidden = false;
-      errorsBox.innerHTML = `<ul>${(data.errors || ['Не удалось сохранить настройки.'])
-        .map((e) => `<li>${esc(e)}</li>`).join('')}</ul>`;
+      showSettingsErrors(data.errors || [t('settings.saveFailed')]);
       return;
     }
     state.config = data.config;
     $('settings-modal').hidden = true;
     clearAlerts();
     (data.notes || []).forEach((note) => alertBox(note, 'info', 12000));
-    alertBox('Настройки сохранены, compose-файлы перегенерированы.', 'success', 6000);
+    alertBox(t('settings.saved'), 'success', 6000);
     refreshStatus();
   } catch (err) {
-    errorsBox.hidden = false;
-    errorsBox.innerHTML = `<ul><li>${esc(err.message)}</li></ul>`;
+    showSettingsErrors([err.message]);
   }
 }
 
 async function addContext() {
-  const errorsBox = $('settings-errors');
   const name = $('remote-name').value.trim();
   const endpoint = $('remote-endpoint').value.trim();
   try {
     const data = await api('/api/context', { method: 'POST', body: { name, endpoint } });
-    errorsBox.hidden = true;
-    state.contexts = data.contexts || state.contexts;
+    $('settings-errors').hidden = true;
+    state.contexts = Array.isArray(data.contexts) ? data.contexts : state.contexts;
     $('context-list').innerHTML = state.contexts
       .map((contextName) => `<option value="${esc(contextName)}"></option>`).join('');
     $('remote-name').value = '';
     $('remote-endpoint').value = '';
-    $('settings-note').textContent = `Контекст «${name}» добавлен. Выберите его в поле «Контекст Windows-контейнеров».`;
+    $('settings-note').textContent = t('settings.contextAdded', name);
   } catch (err) {
-    errorsBox.hidden = false;
-    errorsBox.innerHTML = `<ul><li>${esc(err.message)}</li></ul>`;
+    showSettingsErrors([err.message]);
   }
 }
 
 /* ----------------------------------------------------------------- wire -- */
 
 $('btn-start-all').onclick = () => runAction('all', 'up');
-$('btn-stop-all').onclick = () => runAction('all', 'stop',
-  'Остановить все версии Revit Server и прокси?');
+$('btn-stop-all').onclick = () => runAction('all', 'stop', t('confirm.stopAll'));
 $('btn-settings').onclick = openSettings;
 $('btn-close-settings').onclick = () => { $('settings-modal').hidden = true; };
 $('btn-cancel-settings').onclick = () => { $('settings-modal').hidden = true; };
@@ -633,7 +715,7 @@ $('btn-clear-log').onclick = () => { $('log').textContent = ''; };
 
 $('btn-cancel-job').onclick = async () => {
   if (!state.activeJobId) return;
-  if (!window.confirm('Прервать выполняющуюся операцию?')) return;
+  if (!window.confirm(t('confirm.cancelJob'))) return;
   try {
     await api('/api/job/cancel', { method: 'POST', body: { id: state.activeJobId } });
   } catch (err) {
@@ -642,10 +724,10 @@ $('btn-cancel-job').onclick = async () => {
 };
 
 $('btn-shutdown').onclick = async () => {
-  if (!window.confirm('Закрыть панель управления?\n\nЗапущенные контейнеры продолжат работать.')) return;
+  if (!window.confirm(t('confirm.shutdown'))) return;
   try { await api('/api/shutdown', { method: 'POST', body: {} }); } catch (err) { /* expected */ }
   clearAlerts();
-  alertBox('Панель остановлена. Эту вкладку можно закрыть.', 'info');
+  alertBox(t('shutdown.done'), 'info');
   if (state.statusTimer) clearInterval(state.statusTimer);
   if (state.healthTimer) clearInterval(state.healthTimer);
   stopLogPolling();
@@ -677,6 +759,9 @@ function startPolling() {
   }
 }
 
-refreshStatus().then(refreshHealth);
-refreshJobs();
-startPolling();
+// The texts come first: every render below needs them.
+initLanguage().then(() => {
+  refreshStatus().then(refreshHealth);
+  refreshJobs();
+  startPolling();
+});

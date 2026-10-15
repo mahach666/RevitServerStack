@@ -16,11 +16,20 @@ Bug reports and pull requests are welcome.
 ## Rules for the panel code
 
 - Windows PowerShell 5.1 only: no ternary, no `??`, no `?.`.
-- `.ps1` files are saved as UTF-8 with BOM and CRLF line endings. Without the BOM, PowerShell 5.1 reads the Russian messages as garbage.
-- The panel UI is in Russian, code and comments are in English.
+- `.ps1` files are saved as UTF-8 with BOM and CRLF line endings. Without the BOM, PowerShell 5.1 reads non-ASCII characters as garbage.
+- Code and comments are in English. Text that a user sees (the panel, the messages the panel sends, the console window) does not live in code: it is a key in `panel/www/i18n/*.json`, see [Translations](#translations).
 - No dependencies and no build step. The panel must run from a plain checkout.
 - Everything that reaches a command line (names, paths, docker arguments) goes through `ConvertTo-CliArg` and is validated in `Test-PanelConfig`.
 - Keep the names `rs<year>`, `revit-proxy` and the compose project `samples`. Changing them makes docker rebuild images that already exist.
+
+## Translations
+
+The panel, the messages it sends and its console window use one set of catalogs, `panel/www/i18n/<code>.json`, with a flat `key: text` list. The browser reads them with `t()` in `app.js` and PowerShell with `T` in `panel/lib/I18n.ps1`. `en.json` is the source of truth: every other catalog must have exactly its keys, the same `{0}` placeholders and the same `<code>` markup (the self-checks verify this, and that no Cyrillic is left in code). A missing key falls back to English.
+
+- Fix a translation: edit the text in `panel/www/i18n/<code>.json`.
+- New text: add the key to every catalog, English first. Put it in HTML as `data-i18n="key"` (also `-html`, `-title`, `-placeholder`, `-aria-label` variants), in JavaScript as `t('key', arg)`, in PowerShell as `T 'key' $arg`. Never build a sentence from pieces, because word order differs between languages.
+- New language: add `<code>.json` and an entry to `panel/www/i18n/index.json` (the code and the name of the language in itself). A browser or Windows language such as `zh-TW` finds the entry by its two-letter prefix, so nothing else is needed in the panel, and `Invoke-Tests.ps1` then checks the new catalog like the others.
+- The menu of the tray icon cannot read the catalogs: its few lines are the `L10n` table in `launcher/RevitServerStack.cs`, one column per language, in the same order as `Languages`.
 
 ## The tray launcher and releases
 
@@ -50,7 +59,7 @@ Autodesk lists the current installer on [Revit Server 2026](https://www.autodesk
 1. Copy the link of the `.sfx.exe` from the page. Drop everything after `.exe` (`?_gl=...` is only analytics) and check it with `curl -I`.
 2. In `src/rs<year>/Dockerfile` put the new file name into the `ADD` line and into the first `7zr.exe x` command, and the new link into the `ADD` line.
 3. The archive inside the installer has a name with the same update number (`RVT_2026_4_NA_win_db_002_002.7z`). List it with `7zr.exe l <installer>` and put the exact name into both `7zr.exe x` commands.
-4. Build the image from the panel («Пересобрать») and write in the pull request that it started.
+4. Build the image from the panel ("Rebuild") and write in the pull request that it started.
 
 ## Dockerfiles
 

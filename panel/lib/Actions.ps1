@@ -20,12 +20,8 @@ function Get-ActionTitle {
     param([string]$Action, [string]$Subject)
 
     switch ($Action) {
-        'up'      { return "Запуск $Subject" }
-        'build'   { return "Сборка и запуск $Subject" }
-        'stop'    { return "Остановка $Subject" }
-        'restart' { return "Перезапуск $Subject" }
-        'down'    { return "Удаление контейнера $Subject" }
-        default   { return "$Action $Subject" }
+        { @('up', 'build', 'stop', 'restart', 'down') -contains $_ } { return (T "job.$Action" $Subject) }
+        default { return "$Action $Subject" }
     }
 }
 
@@ -52,12 +48,12 @@ function Invoke-VersionAction {
     )
 
     if ($script:VersionActions -notcontains $Action) {
-        return [pscustomobject]@{ ok = $false; error = "Неизвестное действие: $Action" }
+        return [pscustomobject]@{ ok = $false; error = (T 'act.unknownAction' $Action) }
     }
 
     $version = Get-VersionConfig -Config $Config -Year $Year
     if (-not $version) {
-        return [pscustomobject]@{ ok = $false; error = "Версия $Year не найдена в настройках." }
+        return [pscustomobject]@{ ok = $false; error = (T 'act.noVersion' $Year) }
     }
 
     $target = "rs$Year"
@@ -65,7 +61,7 @@ function Invoke-VersionAction {
     if ($existing) {
         return [pscustomobject]@{
             ok    = $false
-            error = "Для Revit Server $Year уже выполняется операция «$($existing.title)»."
+            error = (T 'act.busyVersion' $Year $existing.title)
             jobId = $existing.id
         }
     }
@@ -76,23 +72,18 @@ function Invoke-VersionAction {
             # The folder is on the server: it is not created from here, and a path
             # inside this repository or a relative one does not exist there.
             if (-not (Test-RemoteDataDir -Path ([string]$version.dataDir) -RepoRoot $RepoRoot)) {
-                return [pscustomobject]@{
-                    ok    = $false
-                    error = ("Docker работает на другом компьютере ($($engine.Host)), поэтому папка моделей версии $Year " +
-                        "должна быть полным путём на нём, например D:\RevitServerData\rs$Year, и существовать заранее: Docker для Windows " +
-                        "сам её не создаёт. Сейчас: $($version.dataDir)")
-                }
+                return [pscustomobject]@{ ok = $false; error = (T 'act.remoteDir' $engine.Host $Year ([string]$version.dataDir)) }
             }
         } elseif (-not (Initialize-VersionDataDir -Version $version)) {
             # A bind mount to a missing host folder either fails or gets created by
             # the engine with surprising ownership - create it here, deterministically.
-            return [pscustomobject]@{ ok = $false; error = "Не задана папка с моделями для версии $Year." }
+            return [pscustomobject]@{ ok = $false; error = (T 'act.noDir' $Year) }
         }
     }
 
     $composeFile = Get-VersionComposePath -ComposeDir $ComposeDir -Year $Year
     if (-not (Test-Path -LiteralPath $composeFile)) {
-        return [pscustomobject]@{ ok = $false; error = "Не найден compose-файл: $composeFile" }
+        return [pscustomobject]@{ ok = $false; error = (T 'act.noCompose' $composeFile) }
     }
 
     $parts = Get-ComposeBaseArgs -Context ([string]$Config.windowsContext) `
@@ -113,28 +104,28 @@ function Invoke-ProxyAction {
     )
 
     if ($script:ProxyActions -notcontains $Action) {
-        return [pscustomobject]@{ ok = $false; error = "Неизвестное действие: $Action" }
+        return [pscustomobject]@{ ok = $false; error = (T 'act.unknownAction' $Action) }
     }
 
     $existing = Get-RunningJobForTarget -Target 'proxy'
     if ($existing) {
         return [pscustomobject]@{
             ok    = $false
-            error = "Для прокси уже выполняется операция «$($existing.title)»."
+            error = (T 'act.busyProxy' $existing.title)
             jobId = $existing.id
         }
     }
 
     $composeFile = Get-ProxyComposePath -ComposeDir $ComposeDir
     if (-not (Test-Path -LiteralPath $composeFile)) {
-        return [pscustomobject]@{ ok = $false; error = "Не найден compose-файл прокси: $composeFile" }
+        return [pscustomobject]@{ ok = $false; error = (T 'act.noComposeProxy' $composeFile) }
     }
 
     $parts = Get-ComposeBaseArgs -Context ([string]$Config.proxyContext) `
         -Project ([string]$Config.composeProject) -ComposeFile $composeFile
     $parts += Get-ActionComposeArgs -Action $Action
 
-    $subject = "прокси (порт $([int]$Config.proxy.port))"
+    $subject = T 'job.subjectProxy' ([int]$Config.proxy.port)
     $job = Start-PanelJob -Title (Get-ActionTitle -Action $Action -Subject $subject) `
         -Kind $Action -Target 'proxy' -CommandLine (ConvertTo-CliArgLine $parts)
 
@@ -150,30 +141,30 @@ function Invoke-EngineAction {
 
     $existing = Get-RunningJobForTarget -Target 'engine'
     if ($existing) {
-        return [pscustomobject]@{ ok = $false; error = "Уже выполняется: «$($existing.title)»."; jobId = $existing.id }
+        return [pscustomobject]@{ ok = $false; error = (T 'act.busyEngine' $existing.title); jobId = $existing.id }
     }
 
     switch ($Action) {
         'start-desktop' {
             $exe = Get-DockerDesktopExePath
             if (-not $exe) {
-                return [pscustomobject]@{ ok = $false; error = 'Не найден Docker Desktop.exe. Установите Docker Desktop.' }
+                return [pscustomobject]@{ ok = $false; error = (T 'act.noDesktop') }
             }
-            $job = Start-PanelJob -Title 'Запуск Docker Desktop' -Kind 'start-desktop' -Target 'engine' `
+            $job = Start-PanelJob -Title (T 'job.startDesktop') -Kind 'start-desktop' -Target 'engine' `
                 -CommandLine ("start `"`" $(ConvertTo-CliArg $exe)")
             return [pscustomobject]@{ ok = $true; jobId = $job.id; title = $job.title }
         }
         'switch-windows' {
             $exe = Get-DockerCliExePath
             if (-not $exe) {
-                return [pscustomobject]@{ ok = $false; error = 'Не найден DockerCli.exe. Переключите движок вручную в Docker Desktop.' }
+                return [pscustomobject]@{ ok = $false; error = (T 'act.noCli') }
             }
-            $job = Start-PanelJob -Title 'Переключение на Windows-контейнеры' -Kind 'switch-windows' -Target 'engine' `
+            $job = Start-PanelJob -Title (T 'job.switchWindows') -Kind 'switch-windows' -Target 'engine' `
                 -CommandLine ("$(ConvertTo-CliArg $exe) -SwitchWindowsEngine")
             return [pscustomobject]@{ ok = $true; jobId = $job.id; title = $job.title }
         }
         default {
-            return [pscustomobject]@{ ok = $false; error = "Неизвестное действие: $Action" }
+            return [pscustomobject]@{ ok = $false; error = (T 'act.unknownAction' $Action) }
         }
     }
 }

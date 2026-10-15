@@ -102,39 +102,39 @@ function Test-PanelConfig {
 
     $panelPort = 0
     if (-not [int]::TryParse([string]$Config.panelPort, [ref]$panelPort) -or $panelPort -lt 1 -or $panelPort -gt 65535) {
-        $errors += 'Порт панели должен быть числом от 1 до 65535.'
+        $errors += (T 'cfg.panelPort')
     }
 
     $proxyPort = 0
     if (-not [int]::TryParse([string]$Config.proxy.port, [ref]$proxyPort) -or $proxyPort -lt 1 -or $proxyPort -gt 65535) {
-        $errors += 'Порт прокси должен быть числом от 1 до 65535.'
+        $errors += (T 'cfg.proxyPort')
     }
 
     if ([string]::IsNullOrWhiteSpace([string]$Config.windowsContext)) {
-        $errors += 'Не задан docker-контекст для Windows-контейнеров.'
+        $errors += (T 'cfg.noWindowsContext')
     }
     if ([string]::IsNullOrWhiteSpace([string]$Config.composeProject)) {
-        $errors += 'Не задано имя compose-проекта.'
+        $errors += (T 'cfg.noProject')
     } elseif ([string]$Config.composeProject -cnotmatch '^[a-z0-9][a-z0-9_-]*\z') {
-        $errors += 'Имя compose-проекта: только строчные латинские буквы, цифры, «-» и «_», начинаться должно с буквы или цифры.'
+        $errors += (T 'cfg.badProject')
     }
 
     # The project and context names are placed on a cmd.exe command line by the
     # job runner, so anything beyond what docker itself accepts is refused.
     foreach ($contextName in @([string]$Config.windowsContext, [string]$Config.proxyContext)) {
         if ($contextName -and -not (Test-ContextName $contextName)) {
-            $errors += "Имя docker-контекста «$contextName» содержит недопустимые символы."
+            $errors += (T 'cfg.badContext' $contextName)
         }
     }
 
     $hostFields = @(
-        @{ Name = 'windowsHost'; Title = 'Адрес Windows-сервера' },
-        @{ Name = 'proxyHost'; Title = 'Адрес Linux-движка' }
+        @{ Name = 'windowsHost'; Label = 'settings.windowsHost' },
+        @{ Name = 'proxyHost'; Label = 'settings.proxyHost' }
     )
     foreach ($field in $hostFields) {
         $value = ([string]$Config.($field.Name)).Trim()
         if ($value -and -not (Test-HostName $value)) {
-            $errors += "$($field.Title): нужно имя компьютера или IP-адрес, без http://, порта и пробелов."
+            $errors += (T 'cfg.badHost' (T $field.Label))
         }
     }
 
@@ -142,27 +142,27 @@ function Test-PanelConfig {
     foreach ($version in $Config.versions) {
         $hostPort = 0
         if (-not [int]::TryParse([string]$version.hostPort, [ref]$hostPort) -or $hostPort -lt 1 -or $hostPort -gt 65535) {
-            $errors += "Revit Server $($version.year): порт должен быть числом от 1 до 65535."
+            $errors += (T 'cfg.versionPort' $version.year)
             continue
         }
         if ($seenPorts.ContainsKey($hostPort)) {
-            $errors += "Порт $hostPort занят сразу двумя версиями ($($seenPorts[$hostPort]) и $($version.year))."
+            $errors += (T 'cfg.dupPort' $hostPort ($seenPorts[$hostPort]) $version.year)
         } else {
             $seenPorts[$hostPort] = $version.year
         }
         if ($hostPort -eq $proxyPort) {
-            $errors += "Revit Server $($version.year): порт $hostPort совпадает с портом прокси."
+            $errors += (T 'cfg.portProxyClash' $version.year $hostPort)
         }
         if ($hostPort -eq $panelPort) {
-            $errors += "Revit Server $($version.year): порт $hostPort совпадает с портом панели."
+            $errors += (T 'cfg.portPanelClash' $version.year $hostPort)
         }
         if ([string]::IsNullOrWhiteSpace([string]$version.dataDir)) {
-            $errors += "Revit Server $($version.year): не задана папка с моделями."
+            $errors += (T 'cfg.noDir' $version.year)
         }
     }
 
     if ($proxyPort -eq $panelPort) {
-        $errors += 'Порт прокси совпадает с портом панели.'
+        $errors += (T 'cfg.proxyPanelClash')
     }
 
     # net.tcp 808 is baked into the Revit Server protocol - Revit connects to
@@ -170,8 +170,7 @@ function Test-PanelConfig {
     # Two containers cannot publish the same host port.
     $netTcpOwners = @($Config.versions | Where-Object { $_.revitClients } | ForEach-Object { [int]$_.year })
     if ($netTcpOwners.Count -gt 1) {
-        $errors += ("Порт 808 для Revit включён сразу у нескольких версий ($($netTcpOwners -join ', ')). " +
-            'Порт 808 фиксирован в протоколе Revit Server, поэтому его может занимать только одна версия.')
+        $errors += (T 'cfg.port808' ($netTcpOwners -join ', '))
     }
 
     return $errors
@@ -192,7 +191,7 @@ function Get-PanelConfig {
     try {
         $loaded = $raw | ConvertFrom-Json
     } catch {
-        Write-Warning "Не удалось прочитать $ConfigPath ($($_.Exception.Message)). Используются значения по умолчанию."
+        Write-Warning (T 'cfg.unreadable' $ConfigPath $_.Exception.Message)
         return $defaults
     }
 
