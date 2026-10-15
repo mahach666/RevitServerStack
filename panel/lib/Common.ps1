@@ -197,6 +197,32 @@ function Test-HttpEndpoint {
     return (Complete-HttpProbe -Probe $probe -TimeoutMs $TimeoutMs)
 }
 
+# A host name, an IPv4 address or a bracketed IPv6 address, with no scheme, port
+# or path. Such a value ends up in browser links and in the generated
+# nginx.conf, so nothing else is let through. \z, not $: $ also matches before a
+# trailing newline.
+function Test-HostName {
+    param([string]$Value)
+
+    return ($Value -match '^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?)\z')
+}
+
+# What docker itself accepts as the name of a context. Names and addresses reach
+# command lines (jobs run through cmd.exe), hence the strict patterns.
+function Test-ContextName {
+    param([string]$Name)
+
+    return ($Name -cmatch '^[A-Za-z0-9][A-Za-z0-9_.+-]*\z')
+}
+
+# The address of a remote engine as the panel creates contexts: ssh:// or tcp://,
+# starting with a name (never with "-", which ssh would take for an option).
+function Test-ContextEndpoint {
+    param([string]$Endpoint)
+
+    return ($Endpoint -cmatch '^(ssh|tcp)://[A-Za-z0-9\[][A-Za-z0-9._@:\[\]-]*\z')
+}
+
 function Get-UnixMillis {
     param([datetime]$Value = (Get-Date))
     $epoch = [datetime]::SpecifyKind([datetime]'1970-01-01', [System.DateTimeKind]::Utc)

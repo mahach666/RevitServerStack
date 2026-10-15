@@ -47,7 +47,8 @@ function Invoke-VersionAction {
         [Parameter(Mandatory = $true)]$Config,
         [Parameter(Mandatory = $true)][int]$Year,
         [Parameter(Mandatory = $true)][string]$Action,
-        [Parameter(Mandatory = $true)][string]$ComposeDir
+        [Parameter(Mandatory = $true)][string]$ComposeDir,
+        [string]$RepoRoot = ''
     )
 
     if ($script:VersionActions -notcontains $Action) {
@@ -69,10 +70,22 @@ function Invoke-VersionAction {
         }
     }
 
-    # A bind mount to a missing host folder either fails or gets created by the
-    # engine with surprising ownership - create it here, deterministically.
     if ($Action -eq 'up' -or $Action -eq 'build') {
-        if (-not (Initialize-VersionDataDir -Version $version)) {
+        $engine = Get-EngineInfo -Context ([string]$Config.windowsContext) -HostOverride ([string]$Config.windowsHost)
+        if ($engine.Remote) {
+            # The folder is on the server: it is not created from here, and a path
+            # inside this repository or a relative one does not exist there.
+            if (-not (Test-RemoteDataDir -Path ([string]$version.dataDir) -RepoRoot $RepoRoot)) {
+                return [pscustomobject]@{
+                    ok    = $false
+                    error = ("Docker работает на другом компьютере ($($engine.Host)), поэтому папка моделей версии $Year " +
+                        "должна быть полным путём на нём, например D:\RevitServerData\rs$Year, и существовать заранее: Docker для Windows " +
+                        "сам её не создаёт. Сейчас: $($version.dataDir)")
+                }
+            }
+        } elseif (-not (Initialize-VersionDataDir -Version $version)) {
+            # A bind mount to a missing host folder either fails or gets created by
+            # the engine with surprising ownership - create it here, deterministically.
             return [pscustomobject]@{ ok = $false; error = "Не задана папка с моделями для версии $Year." }
         }
     }
@@ -175,7 +188,8 @@ function Invoke-EngineAction {
 function Invoke-StartAll {
     param(
         [Parameter(Mandatory = $true)]$Config,
-        [Parameter(Mandatory = $true)][string]$ComposeDir
+        [Parameter(Mandatory = $true)][string]$ComposeDir,
+        [string]$RepoRoot = ''
     )
 
     $results = @()
@@ -183,7 +197,7 @@ function Invoke-StartAll {
         if (-not $version.enabled) { continue }
         $results += [pscustomobject]@{
             target = "rs$([int]$version.year)"
-            result = (Invoke-VersionAction -Config $Config -Year ([int]$version.year) -Action 'up' -ComposeDir $ComposeDir)
+            result = (Invoke-VersionAction -Config $Config -Year ([int]$version.year) -Action 'up' -ComposeDir $ComposeDir -RepoRoot $RepoRoot)
         }
     }
     if ($Config.proxy.enabled) {

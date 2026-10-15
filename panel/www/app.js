@@ -176,6 +176,10 @@ function appendFinishNote(data) {
     note = `\n— ошибка: код возврата ${data.exitCode} —\n`;
   }
   const logEl = $('log');
+  // The Windows engine does not create a missing bind source, and the daemon's own wording is easy to misread.
+  if (data.exitCode && logEl.textContent.indexOf('bind source path does not exist') >= 0) {
+    note += 'Папка моделей не найдена на машине, где работает Docker. Docker для Windows сам её не создаёт: создайте папку и запустите версию снова.\n';
+  }
   logEl.textContent += note;
   logEl.scrollTop = logEl.scrollHeight;
 }
@@ -191,6 +195,7 @@ function stopLogPolling() {
 function pill(label, kind, actionLabel, onAction) {
   const el = document.createElement('span');
   el.className = `pill ${kind}`;
+  el.title = label;
   el.innerHTML = `<span class="dot"></span><span>${esc(label)}</span>`;
   if (actionLabel && onAction) {
     const btn = document.createElement('button');
@@ -208,27 +213,40 @@ function renderEngines() {
   const status = state.status;
   if (!status) return;
 
-  if (status.dockerDesktop) {
-    host.appendChild(pill('Docker Desktop', 'ok'));
-  } else {
-    host.appendChild(pill('Docker Desktop не запущен', 'bad', 'запустить',
-      () => runAction('engine', 'start-desktop')));
+  // Docker Desktop matters only while one of the engines runs on this machine.
+  if (status.usesLocalEngine) {
+    if (status.dockerDesktop) {
+      host.appendChild(pill('Docker Desktop', 'ok'));
+    } else {
+      host.appendChild(pill('Docker Desktop не запущен', 'bad', 'запустить',
+        () => runAction('engine', 'start-desktop')));
+    }
   }
 
+  // For an engine on another machine the pill names that machine, and the
+  // buttons that drive Docker Desktop make no sense.
   const win = status.windowsEngine;
+  const winName = win.remote ? `${win.host}, ${win.context}` : win.context;
   if (win.reachable) {
-    host.appendChild(pill(`Windows-движок (${win.context})`, 'ok'));
+    host.appendChild(pill(`Windows-движок (${winName})`, 'ok'));
   } else {
-    host.appendChild(pill(`Windows-движок недоступен: ${win.error || win.context}`, 'bad',
-      'переключить', () => runAction('engine', 'switch-windows')));
+    host.appendChild(pill(`Windows-движок недоступен (${winName}): ${win.error || ''}`, 'bad',
+      win.remote ? null : 'переключить', win.remote ? null : () => runAction('engine', 'switch-windows')));
+  }
+  if (win.hostInvalid) {
+    host.appendChild(pill('Адрес Windows-сервера не определён, укажите его в настройках', 'warn'));
   }
 
   const proxyEngine = status.proxyEngine;
   const proxyContextName = proxyEngine.context || 'текущий';
+  const proxyName = proxyEngine.remote ? `${proxyEngine.host}, ${proxyContextName}` : proxyContextName;
   if (proxyEngine.reachable) {
-    host.appendChild(pill(`Linux-движок (${proxyContextName})`, 'ok'));
+    host.appendChild(pill(`Linux-движок (${proxyName})`, 'ok'));
   } else {
-    host.appendChild(pill(`Linux-движок недоступен (${proxyContextName})`, 'warn'));
+    host.appendChild(pill(`Linux-движок недоступен (${proxyName})`, 'warn'));
+  }
+  if (proxyEngine.hostInvalid) {
+    host.appendChild(pill('Адрес Linux-движка не определён, укажите его в настройках', 'warn'));
   }
 
   host.appendChild(pill(`Обновлено ${status.checkedAt}`, 'idle', 'обновить', refreshStatus));
@@ -279,7 +297,11 @@ function renderVersionCard(version) {
     <dt>Образ</dt><dd>${version.imageBuilt
       ? esc(version.imageName)
       : '<span class="muted">не собран — первая сборка качает ~5 ГБ (20–45 мин)</span>'}</dd>
-    <dt>Модели</dt><dd>${esc(version.dataDir)}</dd>
+    <dt>Модели</dt><dd>${esc(version.dataDir)}${state.status.windowsEngine.remote
+      ? (version.dataDirOk
+        ? ' <span class="muted">(на сервере)</span>'
+        : ' <span class="warn-text">(нужен полный путь на сервере, например D:\\RevitServerData\\rs' + esc(version.year) + ')</span>')
+      : ''}</dd>
     <dt>Revit</dt><dd>${version.revitClients
       ? 'порт 808 опубликован — клиенты Revit смогут подключиться'
       : '<span class="warn-text">порт 808 не опубликован — Revit подключиться не сможет (включите в настройках)</span>'}</dd>
@@ -469,6 +491,7 @@ async function openSettings() {
     }
     state.config = data.config;
     state.contexts = data.contexts || [];
+    state.engines = data.engines || null;
     fillSettings();
     $('settings-modal').hidden = false;
   } catch (err) {
@@ -508,6 +531,13 @@ function fillSettings() {
   $('windows-context').value = config.windowsContext;
   $('proxy-context').value = config.proxyContext || '';
   $('compose-project').value = config.composeProject;
+  $('windows-host').value = config.windowsHost || '';
+  $('proxy-host').value = config.proxyHost || '';
+  const engines = state.engines;
+  $('windows-host').placeholder = engines ? `по контексту: ${engines.windows.detectedHost}` : '';
+  $('proxy-host').placeholder = engines ? `по контексту: ${engines.proxy.detectedHost}` : '';
+  $('remote-name').value = '';
+  $('remote-endpoint').value = '';
   $('panel-port').value = config.panelPort;
   $('auto-open').checked = !!config.autoOpenBrowser;
 
@@ -536,6 +566,8 @@ function collectSettings() {
   config.windowsContext = $('windows-context').value.trim();
   config.proxyContext = $('proxy-context').value.trim();
   config.composeProject = $('compose-project').value.trim();
+  config.windowsHost = $('windows-host').value.trim();
+  config.proxyHost = $('proxy-host').value.trim();
   config.panelPort = Number($('panel-port').value);
   config.autoOpenBrowser = $('auto-open').checked;
   return config;
@@ -568,6 +600,25 @@ async function saveSettings() {
   }
 }
 
+async function addContext() {
+  const errorsBox = $('settings-errors');
+  const name = $('remote-name').value.trim();
+  const endpoint = $('remote-endpoint').value.trim();
+  try {
+    const data = await api('/api/context', { method: 'POST', body: { name, endpoint } });
+    errorsBox.hidden = true;
+    state.contexts = data.contexts || state.contexts;
+    $('context-list').innerHTML = state.contexts
+      .map((contextName) => `<option value="${esc(contextName)}"></option>`).join('');
+    $('remote-name').value = '';
+    $('remote-endpoint').value = '';
+    $('settings-note').textContent = `Контекст «${name}» добавлен. Выберите его в поле «Контекст Windows-контейнеров».`;
+  } catch (err) {
+    errorsBox.hidden = false;
+    errorsBox.innerHTML = `<ul><li>${esc(err.message)}</li></ul>`;
+  }
+}
+
 /* ----------------------------------------------------------------- wire -- */
 
 $('btn-start-all').onclick = () => runAction('all', 'up');
@@ -577,6 +628,7 @@ $('btn-settings').onclick = openSettings;
 $('btn-close-settings').onclick = () => { $('settings-modal').hidden = true; };
 $('btn-cancel-settings').onclick = () => { $('settings-modal').hidden = true; };
 $('btn-save-settings').onclick = saveSettings;
+$('btn-add-context').onclick = addContext;
 $('btn-clear-log').onclick = () => { $('log').textContent = ''; };
 
 $('btn-cancel-job').onclick = async () => {

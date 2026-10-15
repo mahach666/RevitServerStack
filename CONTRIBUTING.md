@@ -4,7 +4,7 @@ Bug reports and pull requests are welcome.
 
 ## Before you open a pull request
 
-1. Run the self-checks. They need Windows PowerShell 5.1 and git, and no docker:
+1. Run the self-checks. They need Windows PowerShell 5.1 and git, and the docker CLI (not a running engine) for two checks:
 
    ```
    powershell -NoProfile -ExecutionPolicy Bypass -File panel\tests\Invoke-Tests.ps1

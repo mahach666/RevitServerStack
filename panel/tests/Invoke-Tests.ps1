@@ -14,7 +14,7 @@ Set-StrictMode -Version 1.0
 $ErrorActionPreference = 'Stop'
 
 $panelRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-foreach ($lib in 'Common', 'Config', 'Compose') { . (Join-Path $panelRoot "lib\$lib.ps1") }
+foreach ($lib in 'Common', 'Config', 'Compose', 'Docker') { . (Join-Path $panelRoot "lib\$lib.ps1") }
 
 $script:failed = 0
 
@@ -107,7 +107,7 @@ Check 'default config is valid' {
 
 Check 'compose project name is validated' {
     $config = New-DefaultConfig -RepoRoot (New-FakeRepo)
-    foreach ($bad in @('x&calc', 'My Project', 'UPPER', '-lead', 'a%PATH%')) {
+    foreach ($bad in @('x&calc', 'My Project', 'UPPER', '-lead', 'a%PATH%', "samples`n")) {
         $config.composeProject = $bad
         Assert-True (@(Test-PanelConfig -Config $config).Count -ge 1) "[$bad] was accepted"
     }
@@ -119,7 +119,7 @@ Check 'compose project name is validated' {
 
 Check 'docker context names are validated' {
     $config = New-DefaultConfig -RepoRoot (New-FakeRepo)
-    foreach ($bad in @('a&b', 'two words', 'x"y')) {
+    foreach ($bad in @('a&b', 'two words', 'x"y', "ctx`n")) {
         $config.windowsContext = $bad
         Assert-True (@(Test-PanelConfig -Config $config).Count -ge 1) "[$bad] was accepted as windowsContext"
     }
@@ -159,6 +159,7 @@ Check 'compose and nginx files are generated from the config' {
     $config = New-DefaultConfig -RepoRoot $repo
     $config.versions[0].revitClients = $true
     $config.versions[1].enabled = $false
+    $config.windowsContext = 'rss-test-no-such-context' # not a real context: the engine counts as local
 
     Update-GeneratedFiles -Config $config -RepoRoot $repo -ComposeDir $composeDir | Out-Null
 
@@ -174,6 +175,216 @@ Check 'compose and nginx files are generated from the config' {
     Assert-True ($nginx -notmatch 'upstream rs2025') 'disabled version is routed by nginx'
 }
 
+# ------------------------------------------------------------------- engines --
+
+Check 'engines: local and remote endpoints are told apart' {
+    $cases = @(
+        @{ Endpoint = '';                                            Remote = $false; Host = 'localhost' },
+        @{ Endpoint = 'npipe:////./pipe/dockerDesktopWindowsEngine'; Remote = $false; Host = 'localhost' },
+        @{ Endpoint = 'unix:///var/run/docker.sock';                 Remote = $false; Host = 'localhost' },
+        @{ Endpoint = 'tcp://localhost:2375';                        Remote = $false; Host = 'localhost' },
+        @{ Endpoint = 'tcp://127.0.0.1:2375';                        Remote = $false; Host = 'localhost' },
+        @{ Endpoint = 'tcp://10.0.0.5:2376';                         Remote = $true;  Host = '10.0.0.5' },
+        @{ Endpoint = 'tcp://revit.example.com:2376';                Remote = $true;  Host = 'revit.example.com' },
+        @{ Endpoint = 'ssh://builder@rss-test-host.invalid';         Remote = $true;  Host = 'rss-test-host.invalid' }
+    )
+    foreach ($case in $cases) {
+        $found = Resolve-EngineEndpoint $case.Endpoint
+        Assert-Equal $case.Remote $found.Remote
+        Assert-Equal $case.Host $found.Host
+        Assert-Equal $false $found.HostInvalid
+    }
+
+    $v6 = Resolve-EngineEndpoint 'tcp://[fd00::5]:2376'
+    Assert-True ($v6.Remote -and -not $v6.HostInvalid) 'a bracketed IPv6 address was not accepted'
+
+    # A remote engine whose address cannot be used must not pass for a local one.
+    foreach ($bad in 'tcp://a;b:2376', 'tcp://under_score:2376', 'ssh://host name') {
+        $found = Resolve-EngineEndpoint $bad
+        Assert-True ($found.Remote -and $found.HostInvalid) "[$bad] was not reported as an unusable remote address"
+    }
+}
+
+Check 'engines: the address override wins, and addresses are validated' {
+    foreach ($good in '', 'srv', '10.0.0.5', 'srv.example.com', '[fd00::5]') {
+        $config = New-DefaultConfig -RepoRoot (New-FakeRepo)
+        $config.windowsHost = $good
+        $config.proxyHost = $good
+        Assert-Equal 0 @(Test-PanelConfig -Config $config).Count
+    }
+    foreach ($bad in 'http://srv', 'srv:2022', 'a b', 'a;b', 'a/b', '-srv', 'srv}') {
+        $config = New-DefaultConfig -RepoRoot (New-FakeRepo)
+        $config.windowsHost = $bad
+        Assert-True (@(Test-PanelConfig -Config $config).Count -ge 1) "[$bad] was accepted as windowsHost"
+        $config.windowsHost = ''
+        $config.proxyHost = $bad
+        Assert-True (@(Test-PanelConfig -Config $config).Count -ge 1) "[$bad] was accepted as proxyHost"
+    }
+
+    $info = Get-EngineInfo -Context 'rss-test-no-such-context' -HostOverride ' revit-srv '
+    Assert-Equal 'revit-srv' $info.Host
+    Assert-Equal 'localhost' $info.DetectedHost
+}
+
+Check 'engines: the proxy upstream follows the engine of the Windows containers' {
+    $repo = New-FakeRepo -Years @(2022)
+    $composeDir = Join-Path (New-TempDir) 'compose'
+    $config = New-DefaultConfig -RepoRoot $repo
+    $config.windowsContext = 'rss-test-no-such-context'
+
+    Update-GeneratedFiles -Config $config -RepoRoot $repo -ComposeDir $composeDir | Out-Null
+    $nginx = Get-Content -LiteralPath (Join-Path $composeDir 'proxy\nginx.conf') -Raw
+    Assert-True ($nginx -match 'server host\.docker\.internal:2022;') 'a local engine is not reached through host.docker.internal'
+
+    $config.windowsHost = 'revit-srv.example.com'
+    Update-GeneratedFiles -Config $config -RepoRoot $repo -ComposeDir $composeDir | Out-Null
+    $nginx = Get-Content -LiteralPath (Join-Path $composeDir 'proxy\nginx.conf') -Raw
+    Assert-True ($nginx -match 'server revit-srv\.example\.com:2022;') 'the address of the server is not used as the upstream'
+    Assert-True ($nginx -notmatch 'server host\.docker\.internal') 'host.docker.internal is still an upstream'
+
+    # Nothing but a host name may reach nginx.conf.
+    $refused = $false
+    try { Write-ProxyNginxConf -Config $config -ComposeDir $composeDir -UpstreamHost 'a;b' | Out-Null } catch { $refused = $true }
+    Assert-True $refused 'an upstream with ";" was written into nginx.conf'
+}
+
+Check 'engines: a remote engine needs a models folder on the server' {
+    $root = 'C:\work\stack'
+    foreach ($good in 'D:\RevitServerData\rs2022', 'D:/RevitServerData/rs2022', '\\nas\revit\rs2022', 'C:\work\stack2\rs2022') {
+        Assert-True (Test-RemoteDataDir -Path $good -RepoRoot $root) "[$good] was refused"
+    }
+    foreach ($bad in 'rs2022', '.\rs2022', 'C:\work\stack\samples\rs2022', 'c:/work/stack/samples/rs2022', '') {
+        Assert-True (-not (Test-RemoteDataDir -Path $bad -RepoRoot $root)) "[$bad] was accepted"
+    }
+}
+
+Check 'proxy compose: nginx.conf travels inside the file, not as a bind mount' {
+    $repo = New-FakeRepo -Years @(2022)
+    $composeDir = Join-Path (New-TempDir) 'compose'
+    $config = New-DefaultConfig -RepoRoot $repo
+    $config.windowsContext = 'rss-test-no-such-context'
+    $config.windowsHost = 'revit-srv.example.com'
+    Update-GeneratedFiles -Config $config -RepoRoot $repo -ComposeDir $composeDir | Out-Null
+
+    # A bind mount names a path on the machine of the engine: wrong for a remote one.
+    $composePath = Join-Path $composeDir 'docker-compose.proxy.yml'
+    $yml = Get-Content -LiteralPath $composePath -Raw
+    Assert-True ($yml -notmatch 'type: bind') 'the proxy still mounts a file of this machine'
+    Assert-True ($yml -match 'NGINX_CONF: \|') 'the config is not in the compose file'
+
+    $composeCli = $false
+    if (Get-Command docker -ErrorAction SilentlyContinue) {
+        & docker compose version 2>$null | Out-Null
+        $composeCli = ($LASTEXITCODE -eq 0)
+    }
+    if (-not $composeCli) {
+        Write-Host '      the round trip through "docker compose config" was skipped: no docker compose'
+        return
+    }
+    $model = (& docker compose -p samples -f $composePath config --format json) -join "`n" | ConvertFrom-Json
+    # config prints a literal $ as $$ again, so that its output can be fed back
+    $seen = ([string]$model.services.'revit-proxy'.environment.NGINX_CONF).Replace('$$', '$').TrimEnd()
+    $generated = (Read-TextFileUtf8 (Join-Path $composeDir 'proxy\nginx.conf')).Replace("`r`n", "`n").TrimEnd()
+    Assert-True ($seen -ceq $generated) 'the container would get an nginx.conf different from the generated one'
+    Assert-True (([string]($model.services.'revit-proxy'.command -join ' ')) -match 'exec nginx') 'the container does not start nginx'
+}
+
+Check 'actions: a remote engine gets a folder on the server, a local one gets it created' {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        Write-Host '      skipped: no docker CLI'
+        return
+    }
+    $saved = $env:DOCKER_CONFIG
+    $env:DOCKER_CONFIG = New-TempDir
+    try {
+        . (Join-Path $panelRoot 'lib\Jobs.ps1')
+        . (Join-Path $panelRoot 'lib\Actions.ps1')
+        Initialize-JobStore -Directory (Join-Path (New-TempDir) 'jobs')
+        # Takes the place of the real one for this check: record the command, run nothing.
+        $script:captured = $null
+        function Start-PanelJob {
+            param($Title, $Kind, $Target, $CommandLine, $WorkingDirectory = '')
+            $script:captured = $CommandLine
+            return [pscustomobject]@{ id = 'test'; title = $Title }
+        }
+
+        Assert-True (New-RemoteContext -Name 'rss-win' -Endpoint 'ssh://builder@win-server').ok 'the context was not created'
+        $repo = New-FakeRepo -Years @(2022)
+        $composeDir = Join-Path (New-TempDir) 'compose'
+        $config = New-DefaultConfig -RepoRoot $repo
+        $config.windowsContext = 'rss-win'
+        Update-GeneratedFiles -Config $config -RepoRoot $repo -ComposeDir $composeDir | Out-Null
+        $localFolder = Join-Path $repo 'samples\rs2022'
+
+        # The default folder is inside this repository: refuse, create nothing, start nothing.
+        $result = Invoke-VersionAction -Config $config -Year 2022 -Action 'up' -ComposeDir $composeDir -RepoRoot $repo
+        Assert-True (-not $result.ok) 'a remote engine was given a folder of this machine'
+        Assert-True ($null -eq $script:captured) 'a job was started anyway'
+        Assert-True (-not (Test-Path -LiteralPath $localFolder)) 'a local folder was created for a remote engine'
+
+        # A path on the server: the job goes to the remote context, and nothing is created here.
+        (Get-VersionConfig -Config $config -Year 2022).dataDir = 'D:\RevitServerData\rs2022'
+        $result = Invoke-VersionAction -Config $config -Year 2022 -Action 'up' -ComposeDir $composeDir -RepoRoot $repo
+        Assert-True $result.ok 'a folder on the server was refused'
+        Assert-True ($script:captured -match 'docker --context rss-win compose -p samples -f .*docker-compose\.2022\.yml up -d') "unexpected command: $script:captured"
+        Assert-True (-not (Test-Path -LiteralPath $localFolder)) 'a local folder was created for a remote engine'
+
+        # A local engine: the folder is created here, as before.
+        $config.windowsContext = 'rss-test-no-such-context'
+        (Get-VersionConfig -Config $config -Year 2022).dataDir = $localFolder
+        $script:captured = $null
+        $result = Invoke-VersionAction -Config $config -Year 2022 -Action 'up' -ComposeDir $composeDir -RepoRoot $repo
+        Assert-True $result.ok 'a local engine was refused'
+        Assert-True (Test-Path -LiteralPath $localFolder -PathType Container) 'the local folder was not created'
+    } finally {
+        if ($null -eq $saved) { Remove-Item Env:\DOCKER_CONFIG -ErrorAction SilentlyContinue } else { $env:DOCKER_CONFIG = $saved }
+    }
+}
+
+Check 'engines: names and addresses of contexts are validated strictly' {
+    foreach ($good in 'revit-server', 'win_2022', 'a.b+c') {
+        Assert-True (Test-ContextName $good) "[$good] was refused as a context name"
+    }
+    foreach ($bad in '', 'has space', '-lead', 'x"y', 'a&b', "name`n") {
+        Assert-True (-not (Test-ContextName $bad)) "[$($bad -replace "`n", '\n')] was accepted as a context name"
+    }
+    foreach ($good in 'ssh://srv', 'ssh://builder@win-server', 'ssh://builder@10.0.0.5:2222', 'tcp://srv:2376', 'tcp://[fd00::5]:2376') {
+        Assert-True (Test-ContextEndpoint $good) "[$good] was refused as an address"
+    }
+    foreach ($bad in '', 'srv', 'npipe:////./pipe/x', 'ssh://', 'ssh://-oFoo@srv', 'ssh://a b', 'tcp://a;b', 'ssh://srv/x', "ssh://srv`n") {
+        Assert-True (-not (Test-ContextEndpoint $bad)) "[$($bad -replace "`n", '\n')] was accepted as an address"
+    }
+}
+
+Check 'engines: remote contexts are created and read back' {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+        Write-Host '      skipped: no docker CLI (the engine is not needed, only the CLI)'
+        return
+    }
+    $saved = $env:DOCKER_CONFIG
+    $env:DOCKER_CONFIG = New-TempDir   # contexts of this check never touch the real ones
+    try {
+        foreach ($bad in @(@('has space', 'ssh://srv'), @('-lead', 'ssh://srv'), @('ok-name', 'npipe:////./pipe/x'),
+                           @('ok-name', 'ssh://-oFoo@srv'), @('ok-name', 'tcp://a;b'), @('ok-name', "ssh://srv`n"))) {
+            Assert-True (-not (New-RemoteContext -Name $bad[0] -Endpoint $bad[1]).ok) "[$($bad -join ' ')] was accepted"
+        }
+
+        Assert-True (New-RemoteContext -Name 'rss-win' -Endpoint 'ssh://builder@win-server').ok 'the ssh context was not created'
+        Assert-True (New-RemoteContext -Name 'rss-tcp' -Endpoint 'tcp://10.0.0.5:2376').ok 'the tcp context was not created'
+        Assert-True (-not (New-RemoteContext -Name 'rss-win' -Endpoint 'ssh://other').ok) 'a second context with the same name was accepted'
+
+        $ssh = Get-EngineInfo -Context 'rss-win'
+        Assert-True $ssh.Remote 'the ssh context counts as local'
+        Assert-Equal 'win-server' $ssh.Host
+        $tcp = Get-EngineInfo -Context 'rss-tcp'
+        Assert-True $tcp.Remote 'the tcp context counts as local'
+        Assert-Equal '10.0.0.5' $tcp.Host
+        Assert-True (@(Get-DockerContextNames) -contains 'rss-win') 'the new context is not in the list'
+    } finally {
+        if ($null -eq $saved) { Remove-Item Env:\DOCKER_CONFIG -ErrorAction SilentlyContinue } else { $env:DOCKER_CONFIG = $saved }
+    }
+}
+
 # -------------------------------------------------------------------- server --
 
 function Get-FreePort {
@@ -186,14 +397,22 @@ function Get-FreePort {
 
 # Returns the HTTP status and body; WebException still carries both.
 function Send-TestRequest {
-    param([string]$Url, [string]$Method = 'GET', [hashtable]$Headers = @{}, [string]$HostHeader = '')
+    param([string]$Url, [string]$Method = 'GET', [hashtable]$Headers = @{}, [string]$HostHeader = '', [string]$Body = '')
 
     $request = [System.Net.HttpWebRequest]::Create($Url)
     $request.Method = $Method
     $request.Timeout = 15000
     if ($HostHeader) { $request.Host = $HostHeader }
     foreach ($name in $Headers.Keys) { $request.Headers[$name] = [string]$Headers[$name] }
-    if ($Method -eq 'POST') { $request.ContentLength = 0 }
+    if ($Method -eq 'POST') {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
+        $request.ContentType = 'application/json'
+        $request.ContentLength = $bytes.Length
+        if ($bytes.Length -gt 0) {
+            $stream = $request.GetRequestStream()
+            try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Close() }
+        }
+    }
 
     try {
         $response = $request.GetResponse()
@@ -213,10 +432,15 @@ Check 'server: token, Host header, path traversal, shutdown' {
     $runtimeCopy = Join-Path $copy 'panel\runtime'
     if (Test-Path -LiteralPath $runtimeCopy) { Remove-Item -LiteralPath $runtimeCopy -Recurse -Force }
 
+    # The panel reads and writes docker contexts: give it a config folder of its own.
+    $hasDocker = [bool](Get-Command docker -ErrorAction SilentlyContinue)
+    $savedDockerConfig = $env:DOCKER_CONFIG
+    if ($hasDocker) { $env:DOCKER_CONFIG = New-TempDir }
+
     $port = Get-FreePort
     $base = "http://localhost:$port"
-    $args = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Port {1} -NoBrowser' -f (Join-Path $copy 'panel\server.ps1'), $port
-    $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -PassThru
+    $panelArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Port {1} -NoBrowser' -f (Join-Path $copy 'panel\server.ps1'), $port
+    $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $panelArgs -WindowStyle Hidden -PassThru
 
     try {
         $index = $null
@@ -243,6 +467,17 @@ Check 'server: token, Host header, path traversal, shutdown' {
         Assert-Equal 200 $config.Status
         Assert-Equal 2022 (($config.Body | ConvertFrom-Json).config.versions[0].year)
 
+        if ($hasDocker) {
+            $auth = @{ 'X-Panel-Token' = $token }
+            $new = '{"name":"rss-remote","endpoint":"ssh://builder@win-server"}'
+            Assert-Equal 401 (Send-TestRequest -Url "$base/api/context" -Method POST -Body $new).Status
+            Assert-Equal 400 (Send-TestRequest -Url "$base/api/context" -Method POST -Headers $auth -Body '{"name":"x y","endpoint":"ssh://srv"}').Status
+            Assert-Equal 400 (Send-TestRequest -Url "$base/api/context" -Method POST -Headers $auth -Body '{"name":"ok","endpoint":"npipe:////./pipe/x"}').Status
+            Assert-Equal 200 (Send-TestRequest -Url "$base/api/context" -Method POST -Headers $auth -Body $new).Status
+            $listed = (Send-TestRequest -Url "$base/api/config" -Headers $auth).Body | ConvertFrom-Json
+            Assert-True (@($listed.contexts) -contains 'rss-remote') 'the new context is not offered in the settings'
+        }
+
         Assert-True ((Send-TestRequest -Url "$base/..%5Clib%5CCommon.ps1").Status -ne 200) 'path traversal returned a file'
         Assert-True ((Send-TestRequest -Url "$base/%2e%2e/lib/Common.ps1").Status -ne 200) 'encoded path traversal returned a file'
 
@@ -250,6 +485,7 @@ Check 'server: token, Host header, path traversal, shutdown' {
         Assert-True ($proc.WaitForExit(10000)) 'the server did not stop after /api/shutdown'
     } finally {
         if (-not $proc.HasExited) { try { $proc.Kill() } catch { } }
+        if ($null -eq $savedDockerConfig) { Remove-Item Env:\DOCKER_CONFIG -ErrorAction SilentlyContinue } else { $env:DOCKER_CONFIG = $savedDockerConfig }
     }
 }
 

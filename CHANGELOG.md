@@ -2,6 +2,30 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-10-15
+
+Docker on another computer.
+
+### Added
+
+- The panel works with remote docker contexts (`ssh://`, `tcp://`). Settings has a form that creates such a context and optional address fields. Browser links, readiness checks and the nginx upstream use the address of the server; for an ssh alias the real host name is resolved with `ssh -G`.
+- With a remote engine the models folder is a path on the server: it is not created from the panel's machine, and a version whose folder is not an absolute path outside this repository is refused with an explanation. The folder has to exist already, because the Docker engine for Windows does not create a missing bind source; the panel says so in the settings, in its refusal and after a failed start. The Docker Desktop indicator and its buttons are hidden when no engine is local.
+- The proxy can run on a remote Linux engine.
+
+### Changed
+
+- The generated proxy compose file no longer bind-mounts `nginx.conf`: the config is an environment variable that the container writes out itself. A bind mount names a path on the machine of the engine, so with a remote engine nginx would have found a missing path instead of the file.
+
+### Fixed
+
+- Names and addresses of docker contexts and the project name were checked with `$`, which also matches before a trailing newline. A newline would have split the line of a job wrapper. They are now checked with `\z`.
+- A long docker error no longer stretches the status bar of the panel: it is cut and the full text is in the tooltip. The page no longer asks for `favicon.ico`.
+
+### Notes
+
+- Checked on a real remote Windows engine (Docker Desktop with Windows containers on another PC, reached over ssh): the images of Revit Server 2026 (2026.4) and 2027 build, start, answer on the admin page and in the REST service (roles Accelerator, Host and Admin), accept connections on port 808, and restart, stop and are removed from the panel. This was the first run of those two Dockerfiles. A Revit client was not connected.
+- The proxy was checked on a real remote Linux engine: it started from the panel, routed by year, answered 404 for an unknown year, passed `nginx -t` and was removed from the panel.
+
 ## [1.0.0] - 2026-10-15
 
 First public release.
@@ -42,4 +66,5 @@ First public release.
 - The Dockerfiles for 2026 and 2027 were written against the downloaded installers: the MSI properties, file layout and IIS names were read from them, and the unpacking step was run on the host. No image was built for this release.
 - The existing names are kept so that images that are already built stay in use: compose project `samples`, containers `rs<year>` and `revit-proxy`, models in `samples/rs<year>`.
 
+[1.1.0]: https://github.com/mahach666/RevitServerStack/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/mahach666/RevitServerStack/releases/tag/v1.0.0

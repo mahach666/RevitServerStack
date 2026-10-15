@@ -113,6 +113,137 @@ function Get-DockerContextNames {
     return $names
 }
 
+# --------------------------------------------------------------------- engines --
+#
+# A docker context points at an engine on this machine (named pipe, unix socket)
+# or at a remote one (ssh://, tcp://). The ports a container publishes, and so
+# every browser link and the proxy upstream, belong to the machine of the
+# engine, which is only localhost for a local one.
+
+$script:EngineCache = @{}
+
+# Endpoint of a context ("" = the current context), or "" when it cannot be read.
+function Get-ContextEndpoint {
+    param([string]$Context = '', [int]$TimeoutSec = 10)
+
+    $inspectArgs = @('context', 'inspect', '--format', '{{.Endpoints.docker.Host}}')
+    if (-not [string]::IsNullOrWhiteSpace($Context)) { $inspectArgs += $Context }
+    $run = Invoke-Cli -FilePath 'docker' -Arguments $inspectArgs -TimeoutSec $TimeoutSec
+    if ($run.Launched -and -not $run.TimedOut -and $run.ExitCode -eq 0) { return $run.StdOut.Trim() }
+    return ''
+}
+
+# "pc" in ssh://pc is usually an alias of ~/.ssh/config, which a browser cannot
+# resolve. ssh -G prints the effective settings without connecting anywhere.
+function Resolve-SshHost {
+    param([string]$Alias, [string]$User = '', [int]$Port = -1)
+
+    $sshArgs = @('-G')
+    if ($User -match '^[A-Za-z0-9._-]+\z') { $sshArgs += @('-l', $User) }
+    if ($Port -gt 0) { $sshArgs += @('-p', [string]$Port) }
+    $sshArgs += @('--', $Alias)
+
+    $run = Invoke-Cli -FilePath 'ssh' -Arguments $sshArgs -TimeoutSec 10
+    if ($run.Launched -and -not $run.TimedOut -and $run.ExitCode -eq 0) {
+        $found = [regex]::Match($run.StdOut, '(?m)^hostname\s+(\S+)\s*$')
+        if ($found.Success -and (Test-HostName $found.Groups[1].Value)) { return $found.Groups[1].Value }
+    }
+    return $Alias
+}
+
+function Resolve-EngineEndpoint {
+    param([string]$Endpoint)
+
+    $result = [pscustomobject]@{ Endpoint = $Endpoint; Remote = $false; Host = 'localhost'; HostInvalid = $false }
+    if ([string]::IsNullOrWhiteSpace($Endpoint)) { return $result }
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($Endpoint, [UriKind]::Absolute, [ref]$uri)) {
+        # Not a valid address, but with a remote scheme it is still a remote engine.
+        if ($Endpoint -match '^(ssh|tcp|tls|http|https)://') {
+            $result.Remote = $true
+            $result.HostInvalid = $true
+        }
+        return $result
+    }
+    # npipe:// and unix:// are engines on this machine.
+    if (@('ssh', 'tcp', 'tls', 'http', 'https') -notcontains $uri.Scheme) { return $result }
+
+    $name = $uri.Host
+    if ($name -and (@('localhost', '127.0.0.1', '[::1]') -contains $name.ToLowerInvariant())) { return $result }
+
+    $result.Remote = $true
+    if (-not (Test-HostName $name)) {
+        $result.HostInvalid = $true
+        return $result
+    }
+    $result.Host = $name
+    if ($uri.Scheme -eq 'ssh') {
+        $result.Host = Resolve-SshHost -Alias $name -User $uri.UserInfo -Port $uri.Port
+    }
+    return $result
+}
+
+<#
+.SYNOPSIS
+    Where the engine of a context runs and under which address it is reached.
+.DESCRIPTION
+    HostOverride (a setting of the panel) wins over the address found in the
+    context. Resolved endpoints are cached for half a minute, because the status
+    request comes every few seconds and each lookup starts docker and ssh.
+#>
+function Get-EngineInfo {
+    param([string]$Context = '', [string]$HostOverride = '')
+
+    $cached = $script:EngineCache[$Context]
+    if (-not $cached -or ((Get-Date) - $cached.At).TotalSeconds -gt 30) {
+        $cached = [pscustomobject]@{ At = (Get-Date); Value = (Resolve-EngineEndpoint (Get-ContextEndpoint -Context $Context)) }
+        $script:EngineCache[$Context] = $cached
+    }
+
+    $detected = $cached.Value
+    $override = $HostOverride.Trim()
+    $effective = $detected.Host
+    if ($override) { $effective = $override }
+
+    return [pscustomobject]@{
+        Context      = $Context
+        Endpoint     = $detected.Endpoint
+        Remote       = $detected.Remote
+        DetectedHost = $detected.Host
+        HostInvalid  = ($detected.HostInvalid -and -not $override)
+        Host         = $effective
+    }
+}
+
+# docker context create for an engine on another machine.
+function New-RemoteContext {
+    param([string]$Name, [string]$Endpoint)
+
+    if (-not (Test-ContextName $Name)) {
+        return [pscustomobject]@{ ok = $false; error = 'Имя контекста: латинские буквы, цифры, «-», «_», «.» и «+», начинаться должно с буквы или цифры.' }
+    }
+    if (-not (Test-ContextEndpoint $Endpoint)) {
+        return [pscustomobject]@{ ok = $false; error = 'Адрес: ssh://пользователь@сервер (или ssh://алиас из ~/.ssh/config) либо tcp://сервер:2376.' }
+    }
+
+    $run = Invoke-Cli -FilePath 'docker' -TimeoutSec 20 `
+        -Arguments @('context', 'create', $Name, '--docker', "host=$Endpoint")
+    if (-not $run.Launched) {
+        return [pscustomobject]@{ ok = $false; error = 'Не найден docker CLI. Установите Docker и убедитесь, что docker есть в PATH.' }
+    }
+    if ($run.TimedOut -or $run.ExitCode -ne 0) {
+        $message = $run.StdErr
+        if ([string]::IsNullOrWhiteSpace($message)) { $message = $run.StdOut }
+        $first = ($message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+        if (-not $first) { $first = 'docker context create не выполнился.' }
+        return [pscustomobject]@{ ok = $false; error = [string]$first }
+    }
+
+    $script:EngineCache = @{}
+    return [pscustomobject]@{ ok = $true }
+}
+
 function Test-DockerDesktopRunning {
     $proc = Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue
     return ($null -ne $proc)
@@ -163,8 +294,12 @@ function ConvertTo-UiState {
 function Get-PanelStatus {
     param(
         [Parameter(Mandatory = $true)]$Config,
-        [int]$TimeoutSec = 15
+        [int]$TimeoutSec = 15,
+        [string]$RepoRoot = ''
     )
+
+    $windowsInfo = Get-EngineInfo -Context ([string]$Config.windowsContext) -HostOverride ([string]$Config.windowsHost)
+    $proxyInfo = Get-EngineInfo -Context ([string]$Config.proxyContext) -HostOverride ([string]$Config.proxyHost)
 
     $windows = Get-ContainerMap -Context ([string]$Config.windowsContext) -TimeoutSec $TimeoutSec
     $images = @{}
@@ -202,19 +337,26 @@ function Get-PanelStatus {
             $servesRevit = [bool]$version.revitClients
         }
 
+        # With a remote engine the models folder has to be a path on that machine.
+        $dataDirOk = $true
+        if ($windowsInfo.Remote) {
+            $dataDirOk = [bool](Test-RemoteDataDir -Path ([string]$version.dataDir) -RepoRoot $RepoRoot)
+        }
+
         $versions += [pscustomobject]@{
             year         = $year
             enabled      = [bool]$version.enabled
             hostPort     = [int]$version.hostPort
             dataDir      = [string]$version.dataDir
+            dataDirOk    = $dataDirOk
             revitClients = $servesRevit
             state        = $state
             statusText   = $statusText
             ports        = $ports
             imageBuilt   = $images.ContainsKey($imageName)
             imageName    = $imageName
-            directUrl    = "http://localhost:$([int]$version.hostPort)/RevitServerAdmin$year/"
-            proxyUrl     = "http://localhost:$([int]$Config.proxy.port)/RevitServerAdmin$year/"
+            directUrl    = "http://$($windowsInfo.Host):$([int]$version.hostPort)/RevitServerAdmin$year/"
+            proxyUrl     = "http://$($proxyInfo.Host):$([int]$Config.proxy.port)/RevitServerAdmin$year/"
         }
     }
 
@@ -232,22 +374,30 @@ function Get-PanelStatus {
     return [pscustomobject]@{
         checkedAt     = (Get-Date).ToString('HH:mm:ss')
         dockerDesktop = [bool](Test-DockerDesktopRunning)
+        # Docker Desktop matters only while one of the two engines is on this machine.
+        usesLocalEngine = ((-not $windowsInfo.Remote) -or (-not $proxyInfo.Remote))
         windowsEngine = [pscustomobject]@{
-            context   = [string]$Config.windowsContext
-            reachable = [bool]$windows.Reachable
-            error     = [string]$windows.Error
+            context     = [string]$Config.windowsContext
+            reachable   = [bool]$windows.Reachable
+            error       = [string]$windows.Error
+            remote      = [bool]$windowsInfo.Remote
+            host        = [string]$windowsInfo.Host
+            hostInvalid = [bool]$windowsInfo.HostInvalid
         }
         proxyEngine   = [pscustomobject]@{
-            context   = $proxyContext
-            reachable = [bool]$proxyEngine.Reachable
-            error     = [string]$proxyEngine.Error
+            context     = $proxyContext
+            reachable   = [bool]$proxyEngine.Reachable
+            error       = [string]$proxyEngine.Error
+            remote      = [bool]$proxyInfo.Remote
+            host        = [string]$proxyInfo.Host
+            hostInvalid = [bool]$proxyInfo.HostInvalid
         }
         proxy         = [pscustomobject]@{
             enabled    = [bool]$Config.proxy.enabled
             port       = [int]$Config.proxy.port
             state      = $proxyState
             statusText = $proxyStatusText
-            url        = "http://localhost:$([int]$Config.proxy.port)/"
+            url        = "http://$($proxyInfo.Host):$([int]$Config.proxy.port)/"
         }
         versions      = $versions
     }

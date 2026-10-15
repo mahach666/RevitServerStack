@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="panel-token" content="__PANEL_TOKEN__">
+  <link rel="icon" href="data:,">
   <title>Revit Server Stack</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -99,6 +100,36 @@
           Определяет имена образов (<code>&lt;проект&gt;-rs2022</code>) и контейнеров.
           Менять не нужно: другое имя заставит пересобрать образы заново.
         </p>
+      </div>
+
+      <h3>Удалённый Docker</h3>
+      <p class="hint">
+        Revit Server можно запускать на другом компьютере или сервере. Добавьте его как docker-контекст
+        и выберите этот контекст в поле «Контекст Windows-контейнеров». Адрес: <code>ssh://пользователь@сервер</code>
+        (нужен вход по ключу, на сервере должен быть docker) или <code>tcp://сервер:2376</code>.
+        Папку моделей для такой версии укажите полным путём на сервере, например <code>D:\RevitServerData\rs2022</code>,
+        и создайте её там заранее: Docker для Windows сам её не создаёт.
+      </p>
+      <div class="form-row">
+        <label>Имя нового контекста
+          <input type="text" id="remote-name" class="input-wide" placeholder="revit-server">
+        </label>
+        <label>Адрес
+          <input type="text" id="remote-endpoint" class="input-wide" placeholder="ssh://пользователь@сервер">
+        </label>
+        <button type="button" class="btn btn-small" id="btn-add-context">Добавить контекст</button>
+      </div>
+      <p class="hint">
+        Адрес компьютера для ссылок и прокси определяется по контексту (для ssh-алиаса берётся настоящее имя
+        из <code>~/.ssh/config</code>). Укажите его здесь, только если это определилось неверно.
+      </p>
+      <div class="form-row">
+        <label>Адрес Windows-сервера
+          <input type="text" id="windows-host" class="input-wide">
+        </label>
+        <label>Адрес Linux-движка (прокси)
+          <input type="text" id="proxy-host" class="input-wide">
+        </label>
       </div>
 
       <h3>Панель</h3>

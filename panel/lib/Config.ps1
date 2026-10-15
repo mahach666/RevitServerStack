@@ -43,6 +43,10 @@ function New-DefaultConfig {
         windowsContext  = 'desktop-windows'
         proxyContext    = ''      # empty = current docker context (Linux engine)
         composeProject  = 'samples'
+        # Address of the machine the engines run on, for links and the proxy.
+        # Empty = taken from the docker context (localhost for Docker Desktop).
+        windowsHost     = ''
+        proxyHost       = ''
         autoOpenBrowser = $true
         proxy           = [pscustomobject]@{
             enabled = $true
@@ -58,7 +62,7 @@ function Merge-ConfigWithDefaults {
 
     $result = $Defaults
 
-    $scalarKeys = @('panelPort', 'windowsContext', 'proxyContext', 'composeProject', 'autoOpenBrowser')
+    $scalarKeys = @('panelPort', 'windowsContext', 'proxyContext', 'composeProject', 'windowsHost', 'proxyHost', 'autoOpenBrowser')
     foreach ($key in $scalarKeys) {
         if ($Loaded.PSObject.Properties.Match($key).Count -gt 0 -and $null -ne $Loaded.$key) {
             $result.$key = $Loaded.$key
@@ -111,15 +115,26 @@ function Test-PanelConfig {
     }
     if ([string]::IsNullOrWhiteSpace([string]$Config.composeProject)) {
         $errors += 'Не задано имя compose-проекта.'
-    } elseif ([string]$Config.composeProject -cnotmatch '^[a-z0-9][a-z0-9_-]*$') {
+    } elseif ([string]$Config.composeProject -cnotmatch '^[a-z0-9][a-z0-9_-]*\z') {
         $errors += 'Имя compose-проекта: только строчные латинские буквы, цифры, «-» и «_», начинаться должно с буквы или цифры.'
     }
 
     # The project and context names are placed on a cmd.exe command line by the
     # job runner, so anything beyond what docker itself accepts is refused.
     foreach ($contextName in @([string]$Config.windowsContext, [string]$Config.proxyContext)) {
-        if ($contextName -and $contextName -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.+-]*$') {
+        if ($contextName -and -not (Test-ContextName $contextName)) {
             $errors += "Имя docker-контекста «$contextName» содержит недопустимые символы."
+        }
+    }
+
+    $hostFields = @(
+        @{ Name = 'windowsHost'; Title = 'Адрес Windows-сервера' },
+        @{ Name = 'proxyHost'; Title = 'Адрес Linux-движка' }
+    )
+    foreach ($field in $hostFields) {
+        $value = ([string]$Config.($field.Name)).Trim()
+        if ($value -and -not (Test-HostName $value)) {
+            $errors += "$($field.Title): нужно имя компьютера или IP-адрес, без http://, порта и пробелов."
         }
     }
 
@@ -192,6 +207,19 @@ function Save-PanelConfig {
 
     $json = $Config | ConvertTo-Json -Depth 8
     Write-TextFileUtf8 -Path $ConfigPath -Content $json
+}
+
+# With a remote engine a models folder is a folder on that machine. A path
+# inside this repository only exists here, and a relative path means nothing there.
+function Test-RemoteDataDir {
+    param([string]$Path, [string]$RepoRoot)
+
+    if ($Path -notmatch '^([A-Za-z]:[\\/]|\\\\)') { return $false }
+    if ($RepoRoot) {
+        $local = $RepoRoot.TrimEnd('\', '/') + '\'
+        if (($Path -replace '/', '\').StartsWith($local, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+    }
+    return $true
 }
 
 function Get-VersionConfig {

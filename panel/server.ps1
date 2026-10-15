@@ -201,7 +201,7 @@ function Get-CachedStatus {
         return $script:StatusCache
     }
 
-    $status = Get-PanelStatus -Config $script:Config
+    $status = Get-PanelStatus -Config $script:Config -RepoRoot $script:RepoRoot
     $script:StatusCache = $status
     $script:StatusCacheAt = Get-Date
     return $status
@@ -246,13 +246,39 @@ function Invoke-ConfigGet {
     param($Context)
 
     $contexts = Get-DockerContextNames
+    # What the contexts point at, so the settings can show it next to the
+    # address override fields.
+    $windowsEngine = Get-EngineInfo -Context ([string]$script:Config.windowsContext)
+    $proxyEngine = Get-EngineInfo -Context ([string]$script:Config.proxyContext)
     Send-Json -Context $Context -Data ([pscustomobject]@{
         ok         = $true
         config     = $script:Config
         contexts   = $contexts
+        engines    = [pscustomobject]@{
+            windows = [pscustomobject]@{ remote = [bool]$windowsEngine.Remote; detectedHost = [string]$windowsEngine.DetectedHost }
+            proxy   = [pscustomobject]@{ remote = [bool]$proxyEngine.Remote; detectedHost = [string]$proxyEngine.DetectedHost }
+        }
         repoRoot   = $script:RepoRoot
         composeDir = $script:ComposeDir
     })
+}
+
+function Invoke-ContextCreate {
+    param($Context, $Body)
+
+    if (-not $Body -or -not $Body.name -or -not $Body.endpoint) {
+        Send-Error -Context $Context -Message 'Нужно указать имя контекста и адрес.'
+        return
+    }
+
+    $result = New-RemoteContext -Name ([string]$Body.name) -Endpoint ([string]$Body.endpoint)
+    if (-not $result.ok) {
+        Send-Error -Context $Context -Message $result.error
+        return
+    }
+
+    $script:StatusCache = $null
+    Send-Json -Context $Context -Data ([pscustomobject]@{ ok = $true; contexts = (Get-DockerContextNames) })
 }
 
 function Invoke-ConfigPost {
@@ -280,6 +306,16 @@ function Invoke-ConfigPost {
     $script:StatusCache = $null
 
     $notes = @()
+    $engine = Get-EngineInfo -Context ([string]$script:Config.windowsContext) -HostOverride ([string]$script:Config.windowsHost)
+    if ($engine.Remote) {
+        $local = @($script:Config.versions | Where-Object {
+            $_.enabled -and -not (Test-RemoteDataDir -Path ([string]$_.dataDir) -RepoRoot $script:RepoRoot)
+        } | ForEach-Object { $_.year })
+        if ($local.Count -gt 0) {
+            $notes += ("Docker работает на другом компьютере ($($engine.Host)): для версий $($local -join ', ') укажите папку моделей " +
+                'полным путём на нём, например D:\RevitServerData\rs2022, иначе их нельзя будет запустить. Папку нужно создать на сервере заранее.')
+        }
+    }
     if ($portChanged) {
         $notes += 'Порт панели изменён — он вступит в силу после перезапуска панели.'
     }
@@ -307,7 +343,7 @@ function Invoke-ActionPost {
 
     if ($target -eq 'all') {
         $results = $null
-        if ($action -eq 'up') { $results = Invoke-StartAll -Config $script:Config -ComposeDir $script:ComposeDir }
+        if ($action -eq 'up') { $results = Invoke-StartAll -Config $script:Config -ComposeDir $script:ComposeDir -RepoRoot $script:RepoRoot }
         elseif ($action -eq 'stop') { $results = Invoke-StopAll -Config $script:Config -ComposeDir $script:ComposeDir }
         else {
             Send-Error -Context $Context -Message "Для «все» поддерживаются только up и stop."
@@ -334,7 +370,7 @@ function Invoke-ActionPost {
     }
 
     if ($target -match '^rs(\d{4})$') {
-        $result = Invoke-VersionAction -Config $script:Config -Year ([int]$Matches[1]) -Action $action -ComposeDir $script:ComposeDir
+        $result = Invoke-VersionAction -Config $script:Config -Year ([int]$Matches[1]) -Action $action -ComposeDir $script:ComposeDir -RepoRoot $script:RepoRoot
         $code = 200
         if (-not $result.ok) { $code = 409 }
         Send-Json -Context $Context -Data $result -StatusCode $code
@@ -442,6 +478,7 @@ function Invoke-Request {
         '/api/jobs'       { Invoke-JobsRequest -Context $Context; return }
         '/api/job'        { Invoke-JobLogRequest -Context $Context -Query $request.QueryString; return }
         '/api/job/cancel' { Invoke-JobCancel -Context $Context -Body $body; return }
+        '/api/context'    { Invoke-ContextCreate -Context $Context -Body $body; return }
         '/api/action'     { Invoke-ActionPost -Context $Context -Body $body; return }
         '/api/config' {
             if ($method -eq 'POST') { Invoke-ConfigPost -Context $Context -Body $body }
