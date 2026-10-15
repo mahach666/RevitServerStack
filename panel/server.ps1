@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Local control panel for the Revit Server docker images.
+    Local control panel of Revit Server Stack: starts, stops and rebuilds the Revit Server docker images.
 .DESCRIPTION
     Serves a small web UI on http://localhost:<port>/ and drives docker compose
     behind it. Runs on stock Windows PowerShell 5.1 with no extra installs:
@@ -124,7 +124,9 @@ function Send-StaticFile {
     param($Context, [string]$RelativePath)
 
     $full = Join-Path $script:WwwRoot $RelativePath
-    $resolvedRoot = [System.IO.Path]::GetFullPath($script:WwwRoot)
+    # Trailing separator: without it a sibling folder such as "www-old" would
+    # pass the prefix check below.
+    $resolvedRoot = [System.IO.Path]::GetFullPath($script:WwwRoot).TrimEnd('\') + '\'
     $resolvedFull = [System.IO.Path]::GetFullPath($full)
 
     # Refuse anything that escapes www/ (path traversal).
@@ -485,7 +487,7 @@ $listener = $started.Listener
 $url = "http://localhost:$($started.Port)/"
 
 Write-Host ''
-Write-Host '  Панель управления Revit Server' -ForegroundColor Cyan
+Write-Host '  Revit Server Stack: панель управления' -ForegroundColor Cyan
 Write-Host "  $url" -ForegroundColor Green
 Write-Host ''
 Write-Host "  Проект:        $script:RepoRoot"

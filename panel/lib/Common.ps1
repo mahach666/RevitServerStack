@@ -11,11 +11,15 @@ function ConvertTo-CliArg {
 
     if ($null -eq $Value) { return '""' }
     if ($Value.Length -eq 0) { return '""' }
-    if ($Value -notmatch '[\s"]') { return $Value }
+    # The same line also goes through cmd.exe (job wrappers), so cmd's own
+    # metacharacters force quoting too.
+    if ($Value -notmatch '[\s"&|<>^()]') { return $Value }
 
-    # Escape backslashes that precede a quote, then the quote itself.
-    $escaped = $Value -replace '(\*)"', '$1$1\"'
-    $escaped = $escaped -replace '(\+)$', '$1$1'
+    # Double the backslashes that precede a quote, then escape the quote itself;
+    # backslashes at the very end must be doubled so they cannot escape the
+    # closing quote.
+    $escaped = $Value -replace '(\\*)"', '$1$1\"'
+    $escaped = $escaped -replace '(\\+)$', '$1$1'
     return '"' + $escaped + '"'
 }
 
@@ -148,7 +152,7 @@ function Start-HttpProbe {
         $request.Timeout = $TimeoutMs
         $request.ReadWriteTimeout = $TimeoutMs
         $request.AllowAutoRedirect = $true
-        $request.UserAgent = 'revit-server-panel'
+        $request.UserAgent = 'revit-server-stack'
         $async = $request.BeginGetResponse($null, $null)
         return [pscustomobject]@{ Url = $Url; Request = $request; Async = $async; Error = '' }
     } catch {

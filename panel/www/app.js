@@ -1,6 +1,6 @@
 'use strict';
 
-/* Revit Server control panel — front-end.
+/* Revit Server Stack control panel, front-end.
    No dependencies: the panel must run from a plain file server with no
    network access and no npm install. */
 

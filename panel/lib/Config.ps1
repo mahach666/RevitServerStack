@@ -111,6 +111,16 @@ function Test-PanelConfig {
     }
     if ([string]::IsNullOrWhiteSpace([string]$Config.composeProject)) {
         $errors += 'Не задано имя compose-проекта.'
+    } elseif ([string]$Config.composeProject -cnotmatch '^[a-z0-9][a-z0-9_-]*$') {
+        $errors += 'Имя compose-проекта: только строчные латинские буквы, цифры, «-» и «_», начинаться должно с буквы или цифры.'
+    }
+
+    # The project and context names are placed on a cmd.exe command line by the
+    # job runner, so anything beyond what docker itself accepts is refused.
+    foreach ($contextName in @([string]$Config.windowsContext, [string]$Config.proxyContext)) {
+        if ($contextName -and $contextName -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.+-]*$') {
+            $errors += "Имя docker-контекста «$contextName» содержит недопустимые символы."
+        }
     }
 
     $seenPorts = @{}

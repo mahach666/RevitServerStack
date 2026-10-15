@@ -1,9 +1,9 @@
 @echo off
 setlocal enableextensions
-title Revit Server control panel
+title Revit Server Stack
 
 rem ============================================================
-rem  Revit Server control panel launcher.
+rem  Revit Server Stack control panel launcher.
 rem
 rem  Starts a local web UI (http://localhost:8787/ by default)
 rem  that starts, stops, rebuilds and configures every rs<year>
