@@ -253,6 +253,82 @@ Check 'server: token, Host header, path traversal, shutdown' {
     }
 }
 
+# ------------------------------------------------------------------ launcher --
+
+$repoRoot = Split-Path -Parent $panelRoot
+$buildScript = Join-Path $repoRoot 'launcher\Build.ps1'
+
+Check 'launcher: builds, starts the panel, and the panel stops with it' {
+    $outDir = New-TempDir
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $buildScript -OutDir $outDir | Out-Null
+    Assert-Equal 0 $LASTEXITCODE
+    $exe = Join-Path $outDir 'RevitServerStack.exe'
+    Assert-True (Test-Path -LiteralPath $exe) 'RevitServerStack.exe was not built'
+
+    $copy = New-FakeRepo -Years @(2022)
+    Copy-Item -LiteralPath $panelRoot -Destination (Join-Path $copy 'panel') -Recurse
+    $runtimeCopy = Join-Path $copy 'panel\runtime'
+    if (Test-Path -LiteralPath $runtimeCopy) { Remove-Item -LiteralPath $runtimeCopy -Recurse -Force }
+    Copy-Item -LiteralPath $exe -Destination $copy
+
+    $launcher = Start-Process -FilePath (Join-Path $copy 'RevitServerStack.exe') -ArgumentList '--no-browser' -PassThru
+    $serverId = 0
+    try {
+        $urlFile = Join-Path $copy 'panel\runtime\panel.url'
+        $url = $null
+        for ($i = 0; $i -lt 40 -and -not $url; $i++) {
+            Start-Sleep -Milliseconds 500
+            if ($launcher.HasExited) { throw 'the launcher exited during start-up' }
+            if (Test-Path -LiteralPath $urlFile) {
+                $text = (Get-Content -LiteralPath $urlFile -Raw).Trim()
+                if ($text -match '^http://localhost:\d+/$') { $url = $text }
+            }
+        }
+        Assert-True ($null -ne $url) 'the panel address did not appear within 20 seconds'
+        Assert-Equal 200 (Send-TestRequest -Url $url).Status
+
+        $server = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($launcher.Id)" | Where-Object { $_.Name -eq 'powershell.exe' })
+        Assert-Equal 1 $server.Count
+        $serverId = $server[0].ProcessId
+
+        # A killed launcher must not leave a panel without an icon behind.
+        $launcher.Kill()
+        $stopped = $false
+        for ($i = 0; $i -lt 20 -and -not $stopped; $i++) {
+            Start-Sleep -Milliseconds 500
+            $stopped = -not (Get-Process -Id $serverId -ErrorAction SilentlyContinue)
+        }
+        Assert-True $stopped 'the panel kept running after the launcher was killed'
+        Assert-True (-not (Test-Path -LiteralPath $urlFile)) 'the address file was left behind'
+    } finally {
+        if (-not $launcher.HasExited) { try { $launcher.Kill() } catch { } }
+        if ($serverId) { Stop-Process -Id $serverId -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+Check 'release: the archive has the exe and the panel, and no local data' {
+    $outDir = New-TempDir
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $buildScript -Release -OutDir $outDir | Out-Null
+    Assert-Equal 0 $LASTEXITCODE
+    $zipFile = @(Get-ChildItem -LiteralPath $outDir -Filter 'RevitServerStack-*.zip')
+    Assert-Equal 1 $zipFile.Count
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($zipFile[0].FullName)
+    try { $names = @($zip.Entries | ForEach-Object { $_.FullName }) } finally { $zip.Dispose() }
+
+    $top = $zipFile[0].BaseName
+    foreach ($must in 'RevitServerStack.exe', 'panel/server.ps1', 'panel/www/index.html', 'src/rs2022/Dockerfile',
+                      'src/rs2027/Dockerfile', 'README.md', 'LICENSE.md', 'Start-Panel.cmd') {
+        Assert-True ($names -contains "$top/$must") "$must is missing from the archive"
+    }
+    foreach ($mustNot in '^[^/]+/panel/runtime/', '^[^/]+/samples/rs20\d\d/', '^[^/]+/launcher/', '^[^/]+/panel/tests/', '\\') {
+        Assert-Equal 0 @($names | Where-Object { $_ -match $mustNot }).Count
+    }
+    Assert-True (Test-Path -LiteralPath (Join-Path $outDir 'RELEASE_NOTES.md')) 'RELEASE_NOTES.md was not written'
+    Assert-True ((Get-Content -LiteralPath "$($zipFile[0].FullName).sha256" -Raw) -match '^[0-9a-f]{64}  ') 'the .sha256 file is malformed'
+}
+
 if ($script:failed -gt 0) {
     Write-Host "$script:failed check(s) failed." -ForegroundColor Red
     exit 1

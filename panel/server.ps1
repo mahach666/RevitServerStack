@@ -14,11 +14,19 @@
     Overrides the port from the saved configuration.
 .PARAMETER NoBrowser
     Do not open the browser on start.
+.PARAMETER UrlFile
+    Once the panel is ready, writes the address it listens on to this file, and
+    removes the file on exit. Used by RevitServerStack.exe.
+.PARAMETER ParentPid
+    Stops the panel when this process is gone, so that it never outlives the
+    tray icon that started it. Used by RevitServerStack.exe.
 #>
 [CmdletBinding()]
 param(
     [int]$Port = 0,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [string]$UrlFile = '',
+    [int]$ParentPid = 0
 )
 
 Set-StrictMode -Version 1.0
@@ -497,6 +505,8 @@ Write-Host ''
 Write-Host '  Закрыть панель: Ctrl+C в этом окне (контейнеры продолжат работать).' -ForegroundColor DarkGray
 Write-Host ''
 
+if ($UrlFile) { Write-TextFileUtf8 -Path $UrlFile -Content $url }
+
 if (-not $NoBrowser -and $script:Config.autoOpenBrowser) {
     try { Start-Process $url | Out-Null } catch { }
 }
@@ -507,7 +517,11 @@ try {
         # a blocking GetContext() would swallow it until the next request.
         $task = $listener.GetContextAsync()
         $handle = ([System.IAsyncResult]$task).AsyncWaitHandle
-        while ($script:Running -and -not $handle.WaitOne(400)) { }
+        while ($script:Running -and -not $handle.WaitOne(400)) {
+            if ($ParentPid -gt 0 -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) {
+                $script:Running = $false
+            }
+        }
         if (-not $script:Running) { break }
         if (-not $task.IsCompleted) { continue }
 
@@ -524,6 +538,7 @@ try {
 } finally {
     try { $listener.Stop() } catch { }
     try { $listener.Close() } catch { }
+    if ($UrlFile) { Remove-Item -LiteralPath $UrlFile -Force -ErrorAction SilentlyContinue }
     Write-Host ''
     Write-Host 'Панель остановлена. Запущенные контейнеры продолжают работать.' -ForegroundColor DarkGray
 }

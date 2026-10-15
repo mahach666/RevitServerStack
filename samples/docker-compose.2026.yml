@@ -1,0 +1,8 @@
+services:
+  rs2026:
+    build: ../src/rs2026
+    container_name: rs2026
+    ports:
+      - 2026:80   # upstream for the reverse proxy (docker-compose.proxy.yml)
+    volumes:
+      - ./rs2026:C:/ProgramData/Autodesk/Revit Server 2026/Projects

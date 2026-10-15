@@ -10,5 +10,8 @@
 # samples. Anchored, so src/rs<year>/Dockerfile stays tracked.
 /samples/rs20*/
 
+# Release build: RevitServerStack.exe, the archive and its checksum (launcher/Build.ps1)
+/dist/
+
 # Autodesk installers downloaded by hand for the local-file variant of the Dockerfiles
 *.exe

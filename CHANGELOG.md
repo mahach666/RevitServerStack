@@ -8,7 +8,9 @@ First public release.
 
 ### Added
 
+- `RevitServerStack.exe`: a tray icon that starts the panel without a console window, opens it in the browser and stops it on exit. The panel stops by itself if the icon process dies. Built by `launcher/Build.ps1` with the C# compiler that ships with Windows; `launcher/Build.ps1 -Release` also writes the release archive, its SHA-256 and the release notes.
 - Control panel (`Start-Panel.cmd`, `panel/`): start, stop, restart, rebuild and remove every Revit Server version and the proxy, live docker output, job history, settings.
+- Revit Server 2026 (update 2026.4) and 2027: Dockerfiles, compose samples and nginx routes. Autodesk ships them in a new format, so the Dockerfiles unpack the installer with 7-Zip (pinned version, checked SHA-256) instead of running it. The base image is .NET Framework 4.8.
 - Reverse proxy: nginx on one port, routing by the version year in the URL. The panel generates its config and compose file.
 - Option to publish port 808 (WCF net.tcp) for the one version that serves Revit clients.
 - Self-checks of the panel: `panel/tests/Invoke-Tests.ps1`.
@@ -16,9 +18,10 @@ First public release.
 
 ### Changed
 
-- The project is renamed from revit-server-docker to Revit Server Stack (`revit-server-stack`).
+- The project is renamed from revit-server-docker to Revit Server Stack (repository `RevitServerStack`).
 - `.gitignore` is cut down from the generic Visual Studio template to what this project needs.
 - `.gitattributes` keeps CRLF for `.cmd` and `.ps1` files.
+- `panel/server.ps1` takes two new optional parameters, `-UrlFile` and `-ParentPid`, used by the tray launcher. Running it by hand works as before.
 
 ### Fixed
 
@@ -35,7 +38,8 @@ First public release.
 
 ### Notes
 
-- The Dockerfiles are unchanged from [dosymep/revit-server-docker](https://github.com/dosymep/revit-server-docker). Images were not rebuilt for this release.
+- The Dockerfiles for 2020 to 2025 are unchanged from [dosymep/revit-server-docker](https://github.com/dosymep/revit-server-docker).
+- The Dockerfiles for 2026 and 2027 were written against the downloaded installers: the MSI properties, file layout and IIS names were read from them, and the unpacking step was run on the host. No image was built for this release.
 - The existing names are kept so that images that are already built stay in use: compose project `samples`, containers `rs<year>` and `revit-proxy`, models in `samples/rs<year>`.
 
-[1.0.0]: https://github.com/mahach666/revit-server-stack/releases/tag/v1.0.0
+[1.0.0]: https://github.com/mahach666/RevitServerStack/releases/tag/v1.0.0
