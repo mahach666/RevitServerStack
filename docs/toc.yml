@@ -1,0 +1,14 @@
+- name: Guide
+  href: ../README.md
+- name: Руководство
+  href: ../README.ru.md
+- name: Contributing
+  href: ../CONTRIBUTING.md
+- name: Changelog
+  href: ../CHANGELOG.md
+- name: Security
+  href: ../SECURITY.md
+- name: GitHub
+  href: https://github.com/mahach666/RevitServerStack
+- name: DeepWiki
+  href: https://deepwiki.com/mahach666/RevitServerStack

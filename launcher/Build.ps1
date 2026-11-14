@@ -8,7 +8,7 @@
     Needs nothing but Windows: the C# compiler of .NET Framework 4 is part of it.
     The version is read from the newest entry of CHANGELOG.md. With -Release
     the archive holds the exe next to the files git would commit (tracked and
-    new, minus ignored), without the launcher sources and the tests.
+    new, minus ignored), without the launcher sources, the tests, the docs site and the GitHub files.
 .PARAMETER OutDir
     Output folder, dist\ in the repository by default.
 .PARAMETER Release
@@ -30,9 +30,10 @@ if (-not $OutDir) { $OutDir = Join-Path $repo 'dist' }
 # ------------------------------------------------------------------ version --
 
 $changelog = Get-Content -LiteralPath (Join-Path $repo 'CHANGELOG.md') -Raw -Encoding UTF8
-$match = [regex]::Match($changelog, '(?m)^## \[(\d+\.\d+\.\d+)\]')
+$match = [regex]::Match($changelog, '(?m)^## \[(\d+\.\d+\.\d+)(-[0-9A-Za-z.-]+)?\]')
 if (-not $match.Success) { throw 'CHANGELOG.md has no "## [x.y.z]" entry to take the version from.' }
-$version = $match.Groups[1].Value
+$versionNumber = $match.Groups[1].Value
+$version = $versionNumber + $match.Groups[2].Value   # 1.5.0 or 1.5.0-rc.1
 
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ('rss-build-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -111,7 +112,7 @@ try {
     # ------------------------------------------------------------- compile --
 
     $assemblyInfo = Join-Path $work 'AssemblyInfo.cs'
-    $versionFour = "$version.0"
+    $versionFour = "$versionNumber.0"
     [System.IO.File]::WriteAllText($assemblyInfo, @"
 using System.Reflection;
 [assembly: AssemblyTitle("Revit Server Stack")]
@@ -154,7 +155,9 @@ using System.Reflection;
 
     $files = @($listed | Where-Object {
         $_ -and
-        $_ -notmatch '^(launcher|panel/tests)/' -and
+        $_ -notmatch '^(launcher|panel/tests|\.github|\.config)/' -and
+        $_ -notmatch '^docs/(?!images/)' -and
+        $_ -notmatch '^docfx\.json$' -and
         $_ -notmatch '^\.[^/]*$' -and
         (Test-Path -LiteralPath (Join-Path $repo $_) -PathType Leaf)
     } | Sort-Object -Unique)

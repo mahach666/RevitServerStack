@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tool versions
+        shell: pwsh
+        run: |
+          # The self-checks skip what needs the docker CLI; this shows which ones did.
+          git --version
+          if (Get-Command docker -ErrorAction SilentlyContinue) { docker --version; docker compose version } else { 'no docker CLI' }
+          node --version
+          exit 0
+      - name: Self-checks
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File panel/tests/Invoke-Tests.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Invoke-Tests.ps1 failed with exit code $LASTEXITCODE" }
+      - name: Build the launcher
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File launcher/Build.ps1 -OutDir "$env:RUNNER_TEMP/launcher"
+          if ($LASTEXITCODE -ne 0) { throw "Build.ps1 failed with exit code $LASTEXITCODE" }
+      - name: Syntax of the panel script
+        run: node --check panel/www/app.js

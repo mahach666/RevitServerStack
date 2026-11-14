@@ -2,13 +2,14 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-14
 
 ### Added
 
 - The panel, the messages it sends and its console window are translated into English, Russian, German, French, Spanish, Brazilian Portuguese, Simplified Chinese and Japanese. The panel starts in the language of the browser (English when it is not available), a selector in the header changes it and the choice is remembered. The menu of the tray icon follows the language of Windows. Texts live in `panel/www/i18n/*.json`, used by the page and by PowerShell alike. How to fix or add a language: [CONTRIBUTING.md](CONTRIBUTING.md#translations).
 - Self-checks of the translations: every catalog has the keys, placeholders and markup of English, no text is left in code, every key is used, and the tray menu has all languages.
-
+- Documentation site at <https://mahach666.github.io/RevitServerStack/> (built with docfx from the READMEs), a logo, and links to DeepWiki.
+- GitHub Actions: CI runs the self-checks and builds the launcher on every push and pull request; a pushed tag `vX.Y.Z` builds the release archive and publishes the GitHub release. How to cut a release: [CONTRIBUTING.md](CONTRIBUTING.md).
 - Optional integrity check of the Autodesk installers: when `RS<year>_INSTALLER_SHA256` is set (or `--build-arg INSTALLER_SHA256=...` is given to `docker build`), the Dockerfiles compare the downloaded installer with that SHA-256 and fail the build on a mismatch. No hashes are pinned in the repository, see "Verifying the installers" in the README.
 - Self-checks for the panel back end: saving settings, the settings check at start-up, port 808, `$` in paths of the generated compose files, static paths with `:`, job ids, the result of Start all and Stop all, the job runner (exit code, log, `%` in a command line, cancel), the session token.
 
@@ -100,5 +101,6 @@ First public release.
 - The Dockerfiles for 2026 and 2027 were written against the downloaded installers: the MSI properties, file layout and IIS names were read from them, and the unpacking step was run on the host. No image was built for this release.
 - The existing names are kept so that images that are already built stay in use: compose project `samples`, containers `rs<year>` and `revit-proxy`, models in `samples/rs<year>`.
 
+[1.2.0]: https://github.com/mahach666/RevitServerStack/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/mahach666/RevitServerStack/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/mahach666/RevitServerStack/releases/tag/v1.0.0

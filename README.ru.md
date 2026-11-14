@@ -1,6 +1,17 @@
+<p align="center">
+  <img src="docs/images/revitserverstack-banner.png" alt="Revit Server Stack" width="640">
+</p>
+
+<p align="center">
+  <a href="https://github.com/mahach666/RevitServerStack/releases/latest"><img src="https://img.shields.io/github/v/release/mahach666/RevitServerStack?label=release" alt="Latest release"></a>
+  <a href="https://github.com/mahach666/RevitServerStack/actions/workflows/ci.yml"><img src="https://github.com/mahach666/RevitServerStack/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/mahach666/RevitServerStack/actions/workflows/docs.yml"><img src="https://github.com/mahach666/RevitServerStack/actions/workflows/docs.yml/badge.svg" alt="Docs"></a>
+  <a href="https://deepwiki.com/mahach666/RevitServerStack"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+</p>
+
 # Revit Server Stack
 
-[English version](README.md)
+[English version](README.md) | [Сайт документации](https://mahach666.github.io/RevitServerStack/)
 
 Запускайте Autodesk Revit Server 2020-2027 в Docker на одном компьютере с Windows, несколько версий одновременно, и управляйте ими из небольшой локальной веб-панели.
 
@@ -26,7 +37,7 @@ Dockerfile для Revit Server 2020-2025 взяты из [dosymep/revit-server-d
 
 ## Быстрый старт
 
-1. Скачайте `RevitServerStack-<версия>.zip` на странице [Releases](../../releases) и распакуйте. В этой папке хранятся ваши настройки и, по умолчанию, модели (`samples\rs<год>`), поэтому распакуйте её на диск с достаточным свободным местом.
+1. Скачайте `RevitServerStack-<версия>.zip` на странице [Releases](https://github.com/mahach666/RevitServerStack/releases) и распакуйте. В этой папке хранятся ваши настройки и, по умолчанию, модели (`samples\rs<год>`), поэтому распакуйте её на диск с достаточным свободным местом.
 2. Запустите `RevitServerStack.exe`. В области уведомлений появится значок, а панель откроется в браузере по адресу `http://localhost:8787/`. В меню значка есть «Открыть панель», «Журнал запуска» и «Выход». Выход останавливает панель, но не контейнеры.
 3. Найдите карточку нужной версии и нажмите «Собрать и запустить». Вывод сборки виден в реальном времени.
 4. Когда карточка покажет, что версия работает, откройте страницу администратора:

@@ -1217,7 +1217,7 @@ Check 'release: the archive has the exe and the panel, and no local data' {
                       'src/rs2027/Dockerfile', 'README.md', 'LICENSE.md', 'Start-Panel.cmd') {
         Assert-True ($names -contains "$top/$must") "$must is missing from the archive"
     }
-    foreach ($mustNot in '^[^/]+/panel/runtime/', '^[^/]+/samples/rs20\d\d/', '^[^/]+/launcher/', '^[^/]+/panel/tests/', '\\') {
+    foreach ($mustNot in '^[^/]+/panel/runtime/', '^[^/]+/samples/rs20\d\d/', '^[^/]+/launcher/', '^[^/]+/panel/tests/', '^[^/]+/docs/(?!images/)', '^[^/]+/\.github/', '^[^/]+/\.config/', '^[^/]+/docfx\.json$', '^[^/]+/_site/', '\\') {
         Assert-Equal 0 @($names | Where-Object { $_ -match $mustNot }).Count
     }
     Assert-True (Test-Path -LiteralPath (Join-Path $outDir 'RELEASE_NOTES.md')) 'RELEASE_NOTES.md was not written'
