@@ -1,6 +1,9 @@
 services:
   rs2026:
-    build: ../src/rs2026
+    build:
+      context: ../src/rs2026
+      args:
+        INSTALLER_SHA256: ${RS2026_INSTALLER_SHA256:-}   # optional, see README.md
     container_name: rs2026
     ports:
       - 2026:80   # upstream for the reverse proxy (docker-compose.proxy.yml)

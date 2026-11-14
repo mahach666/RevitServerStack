@@ -73,7 +73,7 @@ $script:StatusCacheLanguage = ''
 $script:StatusCacheAt = [datetime]::MinValue
 $script:StatusCacheTtl = [timespan]::FromSeconds(2.5)
 
-$script:Token = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Minimum 0 -Maximum 256) })
+$script:Token = New-SessionToken
 
 # ---------------------------------------------------------------- responses --
 
@@ -139,11 +139,24 @@ function Get-ContentType {
 function Send-StaticFile {
     param($Context, [string]$RelativePath)
 
+    # No file of www/ has a ":" in its name; in a path it means a drive or an NTFS
+    # stream ("index.html::$DATA"), and GetFullPath throws on it.
+    if ($RelativePath.Contains(':')) {
+        Send-Text -Context $Context -Text 'Not found' -StatusCode 404
+        return
+    }
+
     $full = Join-Path $script:WwwRoot $RelativePath
     # Trailing separator: without it a sibling folder such as "www-old" would
     # pass the prefix check below.
     $resolvedRoot = [System.IO.Path]::GetFullPath($script:WwwRoot).TrimEnd('\') + '\'
-    $resolvedFull = [System.IO.Path]::GetFullPath($full)
+    try {
+        $resolvedFull = [System.IO.Path]::GetFullPath($full)
+    } catch {
+        # Characters Windows does not allow in a path: no such file.
+        Send-Text -Context $Context -Text 'Not found' -StatusCode 404
+        return
+    }
 
     # Refuse anything that escapes www/ (path traversal).
     if (-not $resolvedFull.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -184,7 +197,7 @@ function Test-ApiAuthorized {
 
     $supplied = [string]$Request.Headers['X-Panel-Token']
     if ([string]::IsNullOrWhiteSpace($supplied)) { return $false }
-    return ($supplied -ceq $script:Token)
+    return (Test-SecretEqual -Expected $script:Token -Supplied $supplied)
 }
 
 function Read-RequestBody {
@@ -196,7 +209,8 @@ function Read-RequestBody {
     $reader = New-Object System.IO.StreamReader($Request.InputStream, $encoding)
     try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
     if ([string]::IsNullOrWhiteSpace($text)) { return $null }
-    try { return ($text | ConvertFrom-Json) } catch { return $null }
+    # A body that is not JSON is the caller's mistake, not an empty body.
+    try { return ($text | ConvertFrom-Json) } catch { throw (New-Object System.FormatException (T 'srv.badJson')) }
 }
 
 # ----------------------------------------------------------------- handlers --
@@ -300,10 +314,21 @@ function Invoke-ConfigPost {
         return
     }
 
-    $defaults = New-DefaultConfig -RepoRoot $script:RepoRoot
-    $candidate = Merge-ConfigWithDefaults -Loaded $Body -Defaults $defaults
+    if ($Body -isnot [System.Management.Automation.PSCustomObject]) {
+        Send-Error -Context $Context -Message (T 'srv.notObject')
+        return
+    }
 
-    $errors = Test-PanelConfig -Config $candidate
+    # The body changes what it names; everything else stays as it is now.
+    try {
+        $current = Merge-ConfigWithDefaults -Loaded $script:Config -Defaults (New-DefaultConfig -RepoRoot $script:RepoRoot)
+        $candidate = Merge-ConfigWithDefaults -Loaded $Body -Defaults $current
+        $errors = @(Test-PanelConfig -Config $candidate)
+    } catch {
+        # A value of the wrong type (a year that is not a number, ...).
+        Send-Json -Context $Context -Data ([pscustomobject]@{ ok = $false; errors = @($_.Exception.Message) }) -StatusCode 400
+        return
+    }
     if ($errors.Count -gt 0) {
         Send-Json -Context $Context -Data ([pscustomobject]@{ ok = $false; errors = $errors }) -StatusCode 400
         return
@@ -359,7 +384,11 @@ function Invoke-ActionPost {
             Send-Error -Context $Context -Message (T 'srv.allActions')
             return
         }
-        Send-Json -Context $Context -Data ([pscustomobject]@{ ok = $true; results = $results })
+        # No top-level "error": the page lists the failed targets from results.
+        $allOk = Test-AllResultsOk -Results $results
+        $code = 200
+        if (-not $allOk) { $code = 409 }
+        Send-Json -Context $Context -Data ([pscustomobject]@{ ok = $allOk; results = $results }) -StatusCode $code
         return
     }
 
@@ -415,7 +444,7 @@ function Invoke-JobLogRequest {
     param($Context, $Query)
 
     $id = [string]$Query['id']
-    if ([string]::IsNullOrWhiteSpace($id) -or $id -notmatch '^[0-9a-f]{12}$') {
+    if (-not (Test-JobId $id)) {
         Send-Error -Context $Context -Message (T 'srv.badJobId')
         return
     }
@@ -450,6 +479,10 @@ function Invoke-JobCancel {
         Send-Error -Context $Context -Message (T 'srv.noJobId')
         return
     }
+    if (-not (Test-JobId ([string]$Body.id))) {
+        Send-Error -Context $Context -Message (T 'srv.badJobId')
+        return
+    }
     $stopped = Stop-PanelJob -Id ([string]$Body.id)
     $script:StatusCache = $null
     Send-Json -Context $Context -Data ([pscustomobject]@{ ok = $stopped })
@@ -481,7 +514,13 @@ function Invoke-Request {
     }
 
     $body = $null
-    if ($method -eq 'POST') { $body = Read-RequestBody -Request $request }
+    if ($method -eq 'POST') {
+        try { $body = Read-RequestBody -Request $request }
+        catch [System.FormatException] {
+            Send-Error -Context $Context -Message $_.Exception.Message
+            return
+        }
+    }
 
     switch ($path) {
         '/api/status'     { Invoke-StatusRequest -Context $Context; return }

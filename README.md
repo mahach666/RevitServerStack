@@ -76,11 +76,14 @@ Revit Server itself is different. The version ports and the proxy port are publi
 
 ## Run without the panel
 
-A Revit Server version, on the Windows engine:
+A Revit Server version, on the Windows engine. The models folder has to exist first, because the Windows engine does not create a missing bind source (the panel creates it for you; a fresh clone has no `samples\rs2022`):
 
 ```
+if not exist samples\rs2022 mkdir samples\rs2022
 docker --context desktop-windows compose -f samples\docker-compose.2022.yml up -d --build
 ```
+
+In PowerShell the first line is `New-Item -ItemType Directory -Force samples\rs2022 | Out-Null`.
 
 The proxy, on the Linux engine (the default context):
 
@@ -89,6 +92,16 @@ docker compose -f samples\docker-compose.proxy.yml up -d
 ```
 
 Replace `up -d --build` with `stop` or `down` to stop or remove. The samples publish only the HTTP port (`2022:80`). To let Revit connect, add `- '808:808'` to the `ports` list of one version. The sample `nginx.conf` routes all eight versions, while the panel generates a config for the enabled ones only.
+
+## Verifying the installers
+
+The Dockerfiles download the Autodesk installers over HTTPS. The repository does not pin their SHA-256: Autodesk may re-publish a file under the same address, and a hash that was not checked against the vendor would be worse than none. If you want the build to fail when the download is not the file you expect, give it the SHA-256 of that file (from Autodesk, or `Get-FileHash <file> -Algorithm SHA256` on a copy you trust):
+
+- with the panel or the tray icon: set the environment variable `RS<year>_INSTALLER_SHA256` (for example `RS2022_INSTALLER_SHA256`) before starting them;
+- with the compose samples: set the same variable in the shell before `docker compose ... up -d --build`;
+- with `docker build` directly: `docker build --build-arg INSTALLER_SHA256=<hash> src\rs2022`.
+
+An empty value, the default, means no check. For 2026 and 2027 the hash is that of the `.sfx.exe` installer (the 7-Zip helper is pinned already). The check runs when the image is built, so rebuild an existing image after setting the value. Note: after updating to this version the first build of every image runs the installer again (about 14 GB), because the installer step of the Dockerfiles changed; later builds use the cache.
 
 ## Docker on another computer
 

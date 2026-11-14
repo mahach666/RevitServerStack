@@ -18,6 +18,8 @@ const state = {
   activeJobId: null,
   logOffset: 0,
   logRunning: false,
+  logPolling: false,
+  logFailures: 0,
   busy: new Set(),
   statusTimer: null,
   healthTimer: null,
@@ -208,6 +210,7 @@ function attachToJob(jobId) {
   if (!jobId) return;
   state.activeJobId = jobId;
   state.logOffset = 0;
+  state.logFailures = 0;
   state.logRunning = true;
   $('log').textContent = '';
   pollLog();
@@ -216,11 +219,22 @@ function attachToJob(jobId) {
   state.logTimer = setInterval(pollLog, 1000);
 }
 
+// One request at a time: the offset only moves when an answer arrives, so two
+// requests in flight would both get, and append, the same text.
 async function pollLog() {
-  if (!state.activeJobId) return;
+  if (!state.activeJobId || state.logPolling) return;
+  state.logPolling = true;
+  const offset = state.logOffset;
+  let stale = false;
   try {
-    const data = await api(`/api/job?id=${encodeURIComponent(state.activeJobId)}&offset=${state.logOffset}`);
-    if (data.id !== state.activeJobId) return;
+    const data = await api(`/api/job?id=${encodeURIComponent(state.activeJobId)}&offset=${offset}`);
+    state.logFailures = 0;
+    if (data.id !== state.activeJobId || offset !== state.logOffset) {
+      // The view was switched or reset while this was on its way: the text
+      // belongs to the old one. Ask again for the current one.
+      stale = true;
+      return;
+    }
 
     $('log-title').textContent = data.title || '';
     if (data.text) {
@@ -241,7 +255,18 @@ async function pollLog() {
       refreshJobs();
     }
   } catch (err) {
-    stopLogPolling();
+    // One failed request does not end the job: keep polling. A persistent error
+    // (the job is gone, the panel keeps refusing) stops it; the next job start resumes.
+    state.logFailures += 1;
+    if (state.logFailures >= 3) {
+      stopLogPolling();
+      alertBox(t('log.pollStopped', err.message), 'error', 9000);
+    } else if (!state.logTimer) {
+      alertBox(err.message, 'error', 9000);
+    }
+  } finally {
+    state.logPolling = false;
+    if (stale) pollLog();
   }
 }
 
@@ -520,6 +545,7 @@ function renderJobs(jobs) {
     row.onclick = () => {
       state.activeJobId = job.id;
       state.logOffset = 0;
+      state.logFailures = 0;
       $('log').textContent = '';
       pollLog();
       if (!job.finishedAt && !state.logTimer) state.logTimer = setInterval(pollLog, 1000);
@@ -717,7 +743,8 @@ $('btn-cancel-job').onclick = async () => {
   if (!state.activeJobId) return;
   if (!window.confirm(t('confirm.cancelJob'))) return;
   try {
-    await api('/api/job/cancel', { method: 'POST', body: { id: state.activeJobId } });
+    const res = await api('/api/job/cancel', { method: 'POST', body: { id: state.activeJobId } });
+    if (!res || !res.ok) alertBox(t('job.cancelFailed'), 'error', 9000);
   } catch (err) {
     alertBox(err.message, 'error', 9000);
   }
@@ -760,7 +787,10 @@ function startPolling() {
 }
 
 // The texts come first: every render below needs them.
-initLanguage().then(() => {
+initLanguage().catch((err) => {
+  // Without texts the panel still works: keys stand in for them.
+  alertBox(`The interface texts could not be loaded (${err.message}). Reload the page.`, 'error');
+}).then(() => {
   refreshStatus().then(refreshHealth);
   refreshJobs();
   startPolling();

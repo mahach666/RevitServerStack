@@ -164,6 +164,226 @@ Check 'saved settings overlay the discovered versions' {
     Assert-True ($null -eq (Get-VersionConfig -Config $merged -Year 2019)) 'a version without a Dockerfile folder appeared'
 }
 
+Check 'config: port 808 is checked against host ports and the proxy, a disabled version does not own it' {
+    $config = New-DefaultConfig -RepoRoot (New-FakeRepo)
+    $config.versions[0].hostPort = 808
+    $config.versions[1].revitClients = $true
+    $errors = @(Test-PanelConfig -Config $config)
+    Assert-True ($errors -contains (T 'cfg.port808Version' 2022 '2025')) "host port 808 next to a 808 owner was accepted: $($errors -join ' | ')"
+
+    # The version that owns 808 for Revit cannot also publish its own HTTP port there.
+    $config = New-DefaultConfig -RepoRoot (New-FakeRepo)
+    $config.versions[0].hostPort = 808
+    $config.versions[0].revitClients = $true
+    Assert-True (@(Test-PanelConfig -Config $config).Count -ge 1) 'hostPort 808 with revitClients on the same version was accepted'
+
+    # Nothing is published for a disabled version, so it clashes with nobody.
+    $config = New-DefaultConfig -RepoRoot (New-FakeRepo)
+    $config.versions[0].hostPort = 808
+    $config.versions[0].enabled = $false
+    $config.versions[1].revitClients = $true
+    Assert-Equal 0 @(Test-PanelConfig -Config $config).Count
+    $config.versions[0].enabled = $true
+    $config.versions[0].hostPort = 2022
+    $config.versions[0].revitClients = $true
+    $config.versions[0].enabled = $false
+    Assert-Equal 0 @(Test-PanelConfig -Config $config).Count   # a disabled version with revitClients does not block another one
+    $config.versions[0].enabled = $true
+    Assert-True (@(Test-PanelConfig -Config $config).Count -ge 1) 'two enabled port 808 owners were accepted'
+
+    # The proxy port.
+    $config = New-DefaultConfig -RepoRoot (New-FakeRepo)
+    $config.proxy.port = 808
+    Assert-Equal 0 @(Test-PanelConfig -Config $config).Count
+    $config.versions[1].revitClients = $true
+    $errors = @(Test-PanelConfig -Config $config)
+    Assert-True ($errors -contains (T 'cfg.port808Proxy' '2025')) "proxy port 808 next to a 808 owner was accepted: $($errors -join ' | ')"
+    $config.proxy.enabled = $false
+    Assert-Equal 0 @(Test-PanelConfig -Config $config).Count
+}
+
+Check 'config: an invalid saved file is reported and replaced by the defaults, a valid one is kept' {
+    $repo = New-FakeRepo
+    $path = Join-Path (New-TempDir) 'panel.config.json'
+    $bad = @(
+        '{"versions":[{"year":2022,"hostPort":"abc"}]}',
+        '{"composeProject":"x&calc"}',
+        '{"windowsContext":"a|b"}',
+        '{"panelPort":0}',
+        '{"versions":[{"year":"zz"}]}',
+        '5',
+        '[1]',
+        'null',
+        '{"panelPort": 8787,'
+    )
+    foreach ($text in $bad) {
+        [System.IO.File]::WriteAllText($path, $text)
+        Remove-Item -LiteralPath "$path.invalid.bak" -ErrorAction SilentlyContinue
+        $config = Get-PanelConfig -RepoRoot $repo -ConfigPath $path -WarningVariable warned -WarningAction SilentlyContinue
+        Assert-True (@($warned).Count -eq 2) "[$text] was not reported with its backup"
+        # The next save overwrites the file: the hand edits must survive in the backup
+        Assert-Equal $text ([System.IO.File]::ReadAllText("$path.invalid.bak"))
+        Assert-Equal 2022 ((Get-VersionConfig -Config $config -Year 2022).hostPort)
+        Assert-Equal 'samples' $config.composeProject
+        # What the panel starts with must be usable: this is what used to throw.
+        Update-GeneratedFiles -Config $config -RepoRoot $repo -ComposeDir (Join-Path (New-TempDir) 'compose') | Out-Null
+    }
+
+    [System.IO.File]::WriteAllText($path, '{"composeProject":"mine","versions":[{"year":2022,"hostPort":9000}]}')
+    Remove-Item -LiteralPath "$path.invalid.bak" -ErrorAction SilentlyContinue
+    $config = Get-PanelConfig -RepoRoot $repo -ConfigPath $path -WarningVariable warned -WarningAction SilentlyContinue
+    Assert-Equal 0 @($warned).Count
+    Assert-True (-not (Test-Path -LiteralPath "$path.invalid.bak")) 'a valid file was backed up'
+    Assert-Equal 'mine' $config.composeProject
+    Assert-Equal 9000 ((Get-VersionConfig -Config $config -Year 2022).hostPort)
+}
+
+Check 'config: a backup that cannot be written is a warning, the defaults are still used' {
+    $repo = New-FakeRepo
+    $path = Join-Path (New-TempDir) 'panel.config.json'
+    [System.IO.File]::WriteAllText($path, '{"panelPort": 8787,')
+    [System.IO.File]::WriteAllText("$path.invalid.bak", 'old')
+    $lock = [System.IO.File]::Open("$path.invalid.bak", 'Open', 'ReadWrite', 'None')
+    try {
+        $config = Get-PanelConfig -RepoRoot $repo -ConfigPath $path -WarningVariable warned -WarningAction SilentlyContinue
+    } finally { $lock.Dispose() }
+    Assert-Equal 2 @($warned).Count
+    Assert-True ("$($warned[1])" -match [regex]::Escape("$path.invalid.bak")) 'the failed backup was not reported'
+    Assert-Equal 'samples' $config.composeProject
+}
+
+Check 'page and launcher: a persistent log error stops polling; Exit never leaves a launcher without icon' {
+    $js = [System.IO.File]::ReadAllText((Join-Path $panelRoot 'www\app.js'), [System.Text.Encoding]::UTF8)
+    Assert-True ($js -match 'logFailures >= 3\) \{\s+stopLogPolling\(\)') 'polling is not stopped after repeated errors'
+    Assert-True ($js -match 'state\.logOffset = 0;\s+state\.logFailures = 0;') 'a new job does not reset the failure count'
+    $cs = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'launcher\RevitServerStack.cs'), [System.Text.Encoding]::UTF8)
+    Assert-True ($cs -match 'Win32Exception\) \{ \}.*\s+finally\s+\{[^}]*ExitThread\(\);') 'ExitThread is not in a finally after Kill'
+}
+
+Check 'token: 32 bytes from the cryptographic generator, compared in constant time' {
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    for ($i = 0; $i -lt 200; $i++) {
+        $token = New-SessionToken
+        Assert-True ($token -cmatch '^[0-9a-f]{64}\z') "[$token] is not 32 bytes of hex"
+        [void]$seen.Add($token)
+    }
+    Assert-Equal 200 $seen.Count
+
+    $a = New-SessionToken
+    Assert-True (Test-SecretEqual $a $a) 'equal tokens differ'
+    Assert-True (-not (Test-SecretEqual $a (New-SessionToken))) 'different tokens are equal'
+    Assert-True (-not (Test-SecretEqual $a $a.Substring(0, 63))) 'a prefix is equal'
+    Assert-True (-not (Test-SecretEqual $a ($a + '0'))) 'a longer string is equal'
+    Assert-True (-not (Test-SecretEqual $a '')) 'an empty string is equal'
+    Assert-True (-not (Test-SecretEqual 'ab' 'AB')) 'the comparison ignores case'
+
+    $server = [System.IO.File]::ReadAllText((Join-Path $panelRoot 'server.ps1'), [System.Text.Encoding]::UTF8)
+    Assert-True ($server -notmatch 'Get-Random') 'server.ps1 draws something from Get-Random'
+    Assert-True ($server -match '\$script:Token = New-SessionToken') 'the token is not made by New-SessionToken'
+}
+
+# Whether "docker compose config" can be used to read back what the panel wrote.
+function Test-ComposeCli {
+    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { return $false }
+    & docker compose version 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
+Check 'compose: a "$" in a path or a name is escaped, and the installer hash reaches the build' {
+    $root = New-TempDir
+    $repo = Join-Path $root 'repo$x'
+    New-Item -ItemType Directory -Path (Join-Path $repo 'src\rs2022') -Force | Out-Null
+    $composeDir = Join-Path $root 'compose'
+    $config = New-DefaultConfig -RepoRoot $repo
+    $config.windowsContext = 'rss-test-no-such-context'
+    $config.versions[0].dataDir = 'D:\a$b\${x}\rs'
+
+    Update-GeneratedFiles -Config $config -RepoRoot $repo -ComposeDir $composeDir | Out-Null
+    $path = Join-Path $composeDir 'docker-compose.2022.yml'
+    $yml = [System.IO.File]::ReadAllText($path)
+    Assert-True ($yml.Contains('source: ''D:/a$$b/$${x}/rs''')) "the data folder is not escaped:`n$yml"
+    Assert-True ($yml.Contains('repo$$x/src/rs2022''')) "the build context is not escaped:`n$yml"
+    Assert-True ($yml.Contains('INSTALLER_SHA256: ''${RS2022_INSTALLER_SHA256:-}''')) "the installer hash is not handed to the build:`n$yml"
+
+    if (-not (Test-ComposeCli)) {
+        Write-Host '      the round trip through "docker compose config" was skipped: no docker compose'
+        return
+    }
+    $saved = $env:RS2022_INSTALLER_SHA256
+    $env:RS2022_INSTALLER_SHA256 = 'ABC123'
+    try {
+        $model = (& docker compose -p samples -f $path config --format json 2>&1) -join "`n" | ConvertFrom-Json
+    } finally {
+        if ($null -eq $saved) { Remove-Item Env:\RS2022_INSTALLER_SHA256 -ErrorAction SilentlyContinue } else { $env:RS2022_INSTALLER_SHA256 = $saved }
+    }
+    $service = $model.services.rs2022
+    # config prints a literal $ as $$ again, so that its output can be fed back
+    $source = ([string]$service.volumes[0].source).Replace('$$', '$').Replace('\', '/')
+    Assert-Equal 'D:/a$b/${x}/rs' $source
+    $context = ([string]$service.build.context).Replace('$$', '$').Replace('\', '/')
+    Assert-True ($context.EndsWith('repo$x/src/rs2022')) "the build context is [$context]"
+    Assert-Equal 'ABC123' ([string]$service.build.args.INSTALLER_SHA256)
+}
+
+Check 'dockerfiles: the installer is compared with INSTALLER_SHA256 when it is set' {
+    $dockerfiles = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'src') -Recurse -Filter 'Dockerfile')
+    Assert-Equal 8 $dockerfiles.Count
+    foreach ($file in $dockerfiles) {
+        $text = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)
+        $year = [regex]::Match($file.FullName, 'rs(\d{4})').Groups[1].Value
+        $installer = [regex]::Match($text, '(?m)^ADD "[^"]+/([^/"]+\.sfx\.exe)"').Groups[1].Value
+        Assert-True ($installer.Length -gt 0) "rs${year}: no installer in the ADD line"
+        $check = [regex]::Match($text, '(?m)^RUN powershell -NoProfile -Command "[^"]*Get-FileHash ' + [regex]::Escape($installer) + ' -Algorithm SHA256\)\.Hash -ne \$env:INSTALLER_SHA256\)[^"]*"')
+        Assert-True $check.Success "rs${year}: the installer is not checked"
+        $arg = $text.IndexOf("`nARG INSTALLER_SHA256=")
+        Assert-True ($arg -ge 0 -and $arg -lt $check.Index) "rs${year}: ARG INSTALLER_SHA256 does not come before the check"
+        # The check and the use of the installer are one instruction: nothing is unpacked unchecked.
+        $rest = $text.Substring($check.Index + 4)
+        $next = [regex]::Match($rest, '(?m)^(RUN|WORKDIR|COPY|ADD|ENV|EXPOSE|ARG) ')
+        $instruction = $check.Value
+        if ($next.Success) { $instruction = $text.Substring($check.Index, 4 + $next.Index) }
+        Assert-True ($instruction -match '(START /W|7zr\.exe x)') "rs${year}: the check and the use of the installer are in different layers"
+        # The compose sample passes the variable of its version on.
+        $sample = [System.IO.File]::ReadAllText((Join-Path $repoRoot "samples\docker-compose.$year.yml"), [System.Text.Encoding]::UTF8)
+        Assert-True ($sample.Contains('INSTALLER_SHA256: ${RS' + $year + '_INSTALLER_SHA256:-}')) "samples/docker-compose.$year.yml does not pass the hash"
+    }
+
+    # Run the very command of a Dockerfile the way docker does (cmd /S /C), against a stand-in file.
+    $text = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'src\rs2022\Dockerfile'), [System.Text.Encoding]::UTF8)
+    $installer = [regex]::Match($text, '(?m)^ADD "[^"]+/([^/"]+\.sfx\.exe)"').Groups[1].Value
+    $command = [regex]::Match($text, '(?m)^RUN (powershell -NoProfile -Command "[^"]*")').Groups[1].Value
+    $work = New-TempDir
+    [System.IO.File]::WriteAllText((Join-Path $work $installer), 'not an installer')
+    $real = (Get-FileHash -LiteralPath (Join-Path $work $installer) -Algorithm SHA256).Hash
+    $cases = @(
+        @{ Hash = '';                      ExitCode = 0 },
+        @{ Hash = $real;                   ExitCode = 0 },
+        @{ Hash = $real.ToLowerInvariant(); ExitCode = 0 },
+        @{ Hash = ('0' * 64);              ExitCode = 1 }
+    )
+    $savedHash = $env:INSTALLER_SHA256
+    try {
+        foreach ($case in $cases) {
+            $env:INSTALLER_SHA256 = $case.Hash
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = 'cmd.exe'
+            $psi.Arguments = '/S /C "' + $command + '"'
+            $psi.WorkingDirectory = $work
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $proc.StandardOutput.ReadToEnd() | Out-Null
+            $proc.StandardError.ReadToEnd() | Out-Null
+            $proc.WaitForExit()
+            Assert-Equal ([int]$case.ExitCode -ne 0) ($proc.ExitCode -ne 0)
+        }
+    } finally {
+        if ($null -eq $savedHash) { Remove-Item Env:\INSTALLER_SHA256 -ErrorAction SilentlyContinue } else { $env:INSTALLER_SHA256 = $savedHash }
+    }
+}
+
 # ------------------------------------------------------------ generated files --
 
 Check 'compose and nginx files are generated from the config' {
@@ -398,6 +618,170 @@ Check 'engines: remote contexts are created and read back' {
     }
 }
 
+# -------------------------------------------------------------------- jobs --
+
+# Waits until the job is no longer among the running ones; returns its stored state.
+function Wait-TestJob {
+    param([string]$Id, [int]$Seconds = 30)
+    for ($i = 0; $i -lt $Seconds * 5; $i++) {
+        $running = @(Update-JobStates | Where-Object { $_.id -eq $Id })
+        if ($running.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 200
+    }
+    return (Get-PanelJob -Id $Id)
+}
+
+Check 'jobs: ids are validated before they reach a path' {
+    . (Join-Path $panelRoot 'lib\Jobs.ps1')
+    foreach ($good in '0123456789ab', 'ffffffffffff') {
+        Assert-True (Test-JobId $good) "[$good] was refused"
+    }
+    foreach ($bad in '', '..\..\x', '0123456789AB', "0123456789ab`n", '0123456789abc', '0123456789a', '01234567/9ab', 'zzzzzzzzzzzz') {
+        Assert-True (-not (Test-JobId $bad)) "[$bad] was accepted as a job id"
+    }
+
+    # A .json file outside the jobs folder must not be read as a job, nor written back.
+    $base = New-TempDir
+    Initialize-JobStore -Directory (Join-Path $base 'jobs')
+    $victim = Join-Path $base 'victim.json'
+    $original = '{"id":"v","pid":0,"finishedAt":null}'
+    [System.IO.File]::WriteAllText($victim, $original)
+    Assert-True ($null -eq (Get-PanelJob -Id '..\victim')) 'a file outside the jobs folder was read as a job'
+    Assert-True (-not (Stop-PanelJob -Id '..\victim')) 'a file outside the jobs folder was taken for a job to cancel'
+    Assert-Equal $original ([System.IO.File]::ReadAllText($victim))
+}
+
+Check 'jobs: a command runs, its exit code and log are kept, and % reaches it unchanged' {
+    . (Join-Path $panelRoot 'lib\Jobs.ps1')
+    # The jobs folder itself has percent signs in its path: the wrapper must still start.
+    $base = New-TempDir
+    Initialize-JobStore -Directory (Join-Path $base 'x%TEMP%y\jobs')
+
+    $ok = Start-PanelJob -Title 'echo' -Kind 'test' -Target 'rs1' -CommandLine 'echo a%TEMP%b'
+    Assert-True (Test-JobId $ok.id) "[$($ok.id)] is not a job id"
+    $done = Wait-TestJob $ok.id
+    Assert-True ($null -ne $done.finishedAt) 'the job did not finish'
+    Assert-Equal 'completed' ([string]$done.finishedReason)
+    Assert-Equal 0 ([int]$done.exitCode)
+    $log = (Get-JobLogChunk -Id $ok.id).text
+    Assert-True ($log.Contains('a%TEMP%b')) "the percent signs were expanded: $log"
+    Assert-True ($log.Contains('=== echo ===')) 'the header is missing from the log'
+
+    $fail = Start-PanelJob -Title 'exit' -Kind 'test' -Target 'rs2' -CommandLine 'cmd /c exit 3'
+    $done = Wait-TestJob $fail.id
+    Assert-Equal 3 ([int]$done.exitCode)
+
+    # Offsets: what was read is not sent again, and an offset past the end is clamped.
+    $first = Get-JobLogChunk -Id $ok.id
+    Assert-True ($first.offset -gt 0)
+    $again = Get-JobLogChunk -Id $ok.id -Offset $first.offset
+    Assert-Equal '' $again.text
+    Assert-Equal $first.offset $again.offset
+    $past = Get-JobLogChunk -Id $ok.id -Offset 999999
+    Assert-Equal '' $past.text
+    Assert-Equal $first.offset $past.offset
+    Assert-Equal $first.text (Get-JobLogChunk -Id $ok.id -Offset -5).text
+}
+
+Check 'jobs: a running job keeps its target busy, and cancel stops the process' {
+    . (Join-Path $panelRoot 'lib\Jobs.ps1')
+    Initialize-JobStore -Directory (Join-Path (New-TempDir) 'jobs')
+
+    $job = Start-PanelJob -Title 'ping' -Kind 'test' -Target 'rs3' -CommandLine 'ping -n 60 127.0.0.1'
+    try {
+        $busy = Get-RunningJobForTarget -Target 'rs3'
+        Assert-True ($null -ne $busy -and $busy.id -eq $job.id) 'a running job was not found for its target'
+        Assert-True ($null -eq (Get-RunningJobForTarget -Target 'rs4')) 'another target is busy'
+
+        Assert-True (Stop-PanelJob -Id $job.id) 'a running job was not cancelled'
+        $stored = Get-PanelJob -Id $job.id
+        Assert-Equal 'cancelled' ([string]$stored.finishedReason)
+        Assert-True ($null -eq (Get-Process -Id ([int]$job.pid) -ErrorAction SilentlyContinue)) 'the process of a cancelled job is still running'
+        Assert-True ($null -eq (Get-RunningJobForTarget -Target 'rs3')) 'a cancelled job keeps its target busy'
+        Assert-True (-not (Stop-PanelJob -Id $job.id)) 'a finished job was cancelled again'
+    } finally {
+        Stop-Process -Id ([int]$job.pid) -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Check 'jobs: a job that outlived the panel is "detached", and a recycled PID is not the job' {
+    . (Join-Path $panelRoot 'lib\Jobs.ps1')
+    Initialize-JobStore -Directory (Join-Path (New-TempDir) 'jobs')
+
+    $job = Start-PanelJob -Title 'short' -Kind 'test' -Target 'rs5' -CommandLine 'ping -n 2 127.0.0.1'
+    $script:ActiveProcesses.Clear()   # as after a restart of the panel: the handle is gone
+    $done = Wait-TestJob $job.id
+    Assert-Equal 'detached' ([string]$done.finishedReason)
+    Assert-True ($null -eq $done.exitCode) 'an exit code was reported that nobody observed'
+
+    $me = Get-Process -Id $PID
+    $same = [pscustomobject]@{ pid = $PID; pidStartedAt = $me.StartTime.ToString('o') }
+    $recycled = [pscustomobject]@{ pid = $PID; pidStartedAt = $me.StartTime.AddHours(-3).ToString('o') }
+    Assert-True (Test-JobProcessAlive $same) 'the process of the job is not seen'
+    Assert-True (-not (Test-JobProcessAlive $recycled)) 'a process that started later was taken for the job'
+}
+
+Check 'jobs: old finished jobs are removed with their files, unfinished ones stay' {
+    . (Join-Path $panelRoot 'lib\Jobs.ps1')
+    $dir = Join-Path (New-TempDir) 'jobs'
+    Initialize-JobStore -Directory $dir
+    $old = (Get-Date).AddDays(-30)
+    foreach ($case in @(@{ Id = 'aaaaaaaaaaaa'; Finished = $true }, @{ Id = 'bbbbbbbbbbbb'; Finished = $false })) {
+        $finished = $null
+        if ($case.Finished) { $finished = $old.ToString('o') }
+        Save-JobMeta ([pscustomobject]@{ id = $case.Id; target = 't'; finishedAt = $finished })
+        foreach ($ext in 'json', 'log', 'cmd') {
+            $file = Join-Path $dir "$($case.Id).$ext"
+            if (-not (Test-Path -LiteralPath $file)) { [System.IO.File]::WriteAllText($file, 'x') }
+            (Get-Item -LiteralPath $file).LastWriteTime = $old
+        }
+    }
+    Remove-OldJobs
+    foreach ($ext in 'json', 'log', 'cmd') {
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $dir "aaaaaaaaaaaa.$ext"))) "an old finished job left its .$ext"
+        Assert-True (Test-Path -LiteralPath (Join-Path $dir "bbbbbbbbbbbb.$ext")) "an unfinished job lost its .$ext"
+    }
+}
+
+Check 'actions: Start all and Stop all say when a target failed' {
+    . (Join-Path $panelRoot 'lib\Jobs.ps1')
+    . (Join-Path $panelRoot 'lib\Actions.ps1')
+    Initialize-JobStore -Directory (Join-Path (New-TempDir) 'jobs')
+    # Takes the place of the real one: nothing is started.
+    function Start-PanelJob {
+        param($Title, $Kind, $Target, $CommandLine, $WorkingDirectory = '')
+        return [pscustomobject]@{ id = 'test'; title = $Title }
+    }
+
+    Assert-True (Test-AllResultsOk @()) 'no results is not a success'
+    Assert-True (Test-AllResultsOk @([pscustomobject]@{ target = 'a'; result = [pscustomobject]@{ ok = $true } })) 'a success was reported as a failure'
+    Assert-True (-not (Test-AllResultsOk @(
+        [pscustomobject]@{ target = 'a'; result = [pscustomobject]@{ ok = $true } },
+        [pscustomobject]@{ target = 'b'; result = [pscustomobject]@{ ok = $false } }))) 'a failure among successes was lost'
+
+    $repo = New-FakeRepo
+    $composeDir = Join-Path (New-TempDir) 'compose'
+    $config = New-DefaultConfig -RepoRoot $repo
+    $config.windowsContext = 'rss-test-no-such-context'
+
+    # No compose files yet: every target fails.
+    $results = @(Invoke-StopAll -Config $config -ComposeDir $composeDir)
+    Assert-Equal 3 $results.Count
+    Assert-True (-not (Test-AllResultsOk $results)) 'Stop all with nothing to stop reported success'
+    Assert-Equal 0 @($results | Where-Object { $_.result.ok }).Count
+
+    Update-GeneratedFiles -Config $config -RepoRoot $repo -ComposeDir $composeDir | Out-Null
+    Assert-True (Test-AllResultsOk (Invoke-StopAll -Config $config -ComposeDir $composeDir)) 'Stop all failed although every target could be stopped'
+    Assert-True (Test-AllResultsOk (Invoke-StartAll -Config $config -ComposeDir $composeDir -RepoRoot $repo)) 'Start all failed although every target could be started'
+
+    # One target without a compose file: the rest still goes, and the whole is not "ok".
+    Remove-Item -LiteralPath (Join-Path $composeDir 'docker-compose.2025.yml')
+    $results = @(Invoke-StartAll -Config $config -ComposeDir $composeDir -RepoRoot $repo)
+    Assert-Equal 3 $results.Count
+    Assert-True (-not (Test-AllResultsOk $results)) 'a failed target did not fail Start all'
+    Assert-Equal 2 @($results | Where-Object { $_.result.ok }).Count
+}
+
 # -------------------------------------------------------------------- server --
 
 function Get-FreePort {
@@ -511,6 +895,116 @@ Check 'server: token, Host header, path traversal, shutdown' {
         Assert-True ((Send-TestRequest -Url "$base/%2e%2e/lib/Common.ps1").Status -ne 200) 'encoded path traversal returned a file'
 
         Assert-Equal 200 (Send-TestRequest -Url "$base/api/shutdown" -Method POST -Headers @{ 'X-Panel-Token' = $token }).Status
+        Assert-True ($proc.WaitForExit(10000)) 'the server did not stop after /api/shutdown'
+    } finally {
+        if (-not $proc.HasExited) { try { $proc.Kill() } catch { } }
+        if ($null -eq $savedDockerConfig) { Remove-Item Env:\DOCKER_CONFIG -ErrorAction SilentlyContinue } else { $env:DOCKER_CONFIG = $savedDockerConfig }
+    }
+}
+
+Check 'server: settings are merged and checked, bad bodies and paths are refused' {
+    $copy = New-FakeRepo -Years @(2022)
+    Copy-Item -LiteralPath $panelRoot -Destination (Join-Path $copy 'panel') -Recurse
+    $runtimeCopy = Join-Path $copy 'panel\runtime'
+    if (Test-Path -LiteralPath $runtimeCopy) { Remove-Item -LiteralPath $runtimeCopy -Recurse -Force }
+    # A hand-edited file with a bad value: the panel has to start anyway, with the defaults.
+    New-Item -ItemType Directory -Path $runtimeCopy -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $runtimeCopy 'panel.config.json'), '{"versions":[{"year":2022,"hostPort":"abc"}]}')
+
+    $hasDocker = [bool](Get-Command docker -ErrorAction SilentlyContinue)
+    $savedDockerConfig = $env:DOCKER_CONFIG
+    if ($hasDocker) { $env:DOCKER_CONFIG = New-TempDir }
+
+    $port = Get-FreePort
+    $base = "http://localhost:$port"
+    $panelArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Port {1} -NoBrowser' -f (Join-Path $copy 'panel\server.ps1'), $port
+    $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $panelArgs -WindowStyle Hidden -PassThru
+
+    try {
+        $index = $null
+        for ($i = 0; $i -lt 40 -and -not $index; $i++) {
+            Start-Sleep -Milliseconds 500
+            if ($proc.HasExited) { throw 'the server exited during start-up (an invalid saved config must not stop it)' }
+            try { $index = Send-TestRequest -Url "$base/" } catch { }
+        }
+        Assert-True ($null -ne $index) 'the server did not answer within 20 seconds'
+        Assert-True ($index.Body -match 'name="panel-token" content="([0-9a-f]{64})"') 'the token is not in the page'
+        $auth = @{ 'X-Panel-Token' = $Matches[1] }
+        $english = Read-Catalog 'en'
+
+        function Get-TestConfig { return ((Send-TestRequest -Url "$base/api/config" -Headers $auth).Body | ConvertFrom-Json).config }
+        function Save-TestConfig { param([string]$Body) return (Send-TestRequest -Url "$base/api/config" -Method POST -Headers $auth -Body $Body) }
+
+        # Start-up: the bad value was not used.
+        Assert-Equal 2022 (Get-TestConfig).versions[0].hostPort
+
+        # A body that is not an object changes nothing.
+        foreach ($body in '5', '"text"', '[1]', 'true') {
+            $answer = Save-TestConfig $body
+            Assert-Equal 400 $answer.Status
+            Assert-Equal $english['srv.notObject'] (($answer.Body | ConvertFrom-Json).error)
+        }
+        Assert-Equal 2022 (Get-TestConfig).versions[0].hostPort
+
+        # A partial body changes what it names and nothing else.
+        Assert-Equal 200 (Save-TestConfig '{"windowsContext":"my-ctx"}').Status
+        Assert-Equal 'my-ctx' (Get-TestConfig).windowsContext
+        Assert-Equal 200 (Save-TestConfig '{"composeProject":"zz"}').Status
+        $now = Get-TestConfig
+        Assert-Equal 'my-ctx' $now.windowsContext
+        Assert-Equal 'zz' $now.composeProject
+        Assert-Equal 200 (Save-TestConfig '{"versions":[{"year":2022,"hostPort":9123}]}').Status
+        $now = Get-TestConfig
+        Assert-Equal 9123 $now.versions[0].hostPort
+        Assert-Equal 'zz' $now.composeProject
+        Assert-Equal 'my-ctx' $now.windowsContext
+        $saved = [System.IO.File]::ReadAllText((Join-Path $runtimeCopy 'panel.config.json')) | ConvertFrom-Json
+        Assert-Equal 'zz' $saved.composeProject
+        Assert-Equal 9123 $saved.versions[0].hostPort
+
+        # The checks of a save: refused with the list of errors, nothing changes.
+        $refused = Save-TestConfig '{"panelPort":0}'
+        Assert-Equal 400 $refused.Status
+        Assert-True (@(($refused.Body | ConvertFrom-Json).errors) -contains $english['cfg.panelPort']) 'the port error is missing'
+        $refused = Save-TestConfig '{"versions":[{"year":2022,"hostPort":808,"revitClients":true}]}'
+        Assert-Equal 400 $refused.Status
+        $refused = Save-TestConfig '{"versions":[{"year":"zz"}]}'
+        Assert-Equal 400 $refused.Status
+        Assert-True (@(($refused.Body | ConvertFrom-Json).errors).Count -ge 1) 'a value of the wrong type gave no error'
+        Assert-Equal 9123 (Get-TestConfig).versions[0].hostPort
+
+        # A "$" in the folder reaches the compose file escaped.
+        Assert-Equal 200 (Save-TestConfig '{"versions":[{"year":2022,"dataDir":"D:\\a$b\\rs"}]}').Status
+        $yml = [System.IO.File]::ReadAllText((Join-Path $runtimeCopy 'compose\docker-compose.2022.yml'))
+        Assert-True ($yml.Contains('D:/a$$b/rs')) 'the "$" of the folder was not escaped in the compose file'
+
+        # Malformed JSON is said to be malformed, wherever a body is read.
+        foreach ($path in '/api/config', '/api/action', '/api/job/cancel', '/api/context') {
+            $answer = Send-TestRequest -Url "$base$path" -Method POST -Headers $auth -Body '{bad'
+            Assert-Equal 400 $answer.Status
+            Assert-Equal $english['srv.badJson'] (($answer.Body | ConvertFrom-Json).error)
+        }
+
+        # Paths with ":" are "not found", not a server error with the text of an exception.
+        foreach ($path in '/C:/Windows/win.ini', '/index.html::$DATA', '/i18n/en.json:x') {
+            $answer = Send-TestRequest -Url ($base + $path)
+            Assert-Equal 404 $answer.Status
+            Assert-True ($answer.Body -notmatch 'GetFullPath|Exception') "the answer for $path leaks an exception: $($answer.Body)"
+        }
+        Assert-True ((Send-TestRequest -Url "$base/C%3A/Windows/win.ini").Status -ne 500) 'an encoded ":" gave a server error'
+        Assert-Equal 200 (Send-TestRequest -Url "$base/app.js").Status
+
+        # Cancel and log take the same kind of id.
+        $answer = Send-TestRequest -Url "$base/api/job/cancel" -Method POST -Headers $auth -Body '{"id":"..\\..\\..\\x"}'
+        Assert-Equal 400 $answer.Status
+        Assert-Equal $english['srv.badJobId'] (($answer.Body | ConvertFrom-Json).error)
+        Assert-Equal 400 (Send-TestRequest -Url "$base/api/job/cancel" -Method POST -Headers $auth -Body '{"id":"0123456789AB"}').Status
+        Assert-Equal 400 (Send-TestRequest -Url "$base/api/job?id=0123456789AB" -Headers $auth).Status
+        $answer = Send-TestRequest -Url "$base/api/job/cancel" -Method POST -Headers $auth -Body '{"id":"0123456789ab"}'
+        Assert-Equal 200 $answer.Status
+        Assert-Equal $false (($answer.Body | ConvertFrom-Json).ok)
+
+        Assert-Equal 200 (Send-TestRequest -Url "$base/api/shutdown" -Method POST -Headers $auth).Status
         Assert-True ($proc.WaitForExit(10000)) 'the server did not stop after /api/shutdown'
     } finally {
         if (-not $proc.HasExited) { try { $proc.Kill() } catch { } }
@@ -659,6 +1153,48 @@ Check 'launcher: builds, starts the panel, and the panel stops with it' {
         }
         Assert-True $stopped 'the panel kept running after the launcher was killed'
         Assert-True (-not (Test-Path -LiteralPath $urlFile)) 'the address file was left behind'
+    } finally {
+        if (-not $launcher.HasExited) { try { $launcher.Kill() } catch { } }
+        if ($serverId) { Stop-Process -Id $serverId -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+Check 'launcher: the address of a panel that died is not left behind' {
+    $outDir = New-TempDir
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $buildScript -OutDir $outDir | Out-Null
+    Assert-Equal 0 $LASTEXITCODE
+    $exe = Join-Path $outDir 'RevitServerStack.exe'
+
+    $copy = New-FakeRepo -Years @(2022)
+    Copy-Item -LiteralPath $panelRoot -Destination (Join-Path $copy 'panel') -Recurse
+    $runtimeCopy = Join-Path $copy 'panel\runtime'
+    if (Test-Path -LiteralPath $runtimeCopy) { Remove-Item -LiteralPath $runtimeCopy -Recurse -Force }
+    Copy-Item -LiteralPath $exe -Destination $copy
+
+    $launcher = Start-Process -FilePath (Join-Path $copy 'RevitServerStack.exe') -ArgumentList '--no-browser' -PassThru
+    $serverId = 0
+    try {
+        $urlFile = Join-Path $copy 'panel\runtime\panel.url'
+        $found = $false
+        for ($i = 0; $i -lt 40 -and -not $found; $i++) {
+            Start-Sleep -Milliseconds 500
+            if ($launcher.HasExited) { throw 'the launcher exited during start-up' }
+            $found = Test-Path -LiteralPath $urlFile
+        }
+        Assert-True $found 'the panel address did not appear within 20 seconds'
+        $server = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($launcher.Id)" | Where-Object { $_.Name -eq 'powershell.exe' })
+        Assert-Equal 1 $server.Count
+        $serverId = $server[0].ProcessId
+
+        # The panel is killed, so its own clean-up cannot run: the launcher has to remove the file.
+        Stop-Process -Id $serverId -Force
+        $gone = $false
+        for ($i = 0; $i -lt 20 -and -not $gone; $i++) {
+            Start-Sleep -Milliseconds 500
+            $gone = -not (Test-Path -LiteralPath $urlFile)
+        }
+        Assert-True $gone 'the address of a dead panel was left in panel.url'
+        Assert-True (-not $launcher.HasExited) 'the launcher itself went away (its icon must stay to restart the panel)'
     } finally {
         if (-not $launcher.HasExited) { try { $launcher.Kill() } catch { } }
         if ($serverId) { Stop-Process -Id $serverId -Force -ErrorAction SilentlyContinue }

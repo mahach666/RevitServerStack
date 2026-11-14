@@ -138,6 +138,12 @@ function Test-PanelConfig {
         }
     }
 
+    # net.tcp 808 is baked into the Revit Server protocol - Revit connects to
+    # net.tcp://<host>/ModelService<year>/... with no port, so it is always 808.
+    # Two containers cannot publish the same host port. A disabled version
+    # publishes nothing, so it does not count.
+    $netTcpOwners = @($Config.versions | Where-Object { $_.enabled -and $_.revitClients } | ForEach-Object { [int]$_.year })
+
     $seenPorts = @{}
     foreach ($version in $Config.versions) {
         $hostPort = 0
@@ -156,6 +162,9 @@ function Test-PanelConfig {
         if ($hostPort -eq $panelPort) {
             $errors += (T 'cfg.portPanelClash' $version.year $hostPort)
         }
+        if ($version.enabled -and $hostPort -eq 808 -and $netTcpOwners.Count -gt 0) {
+            $errors += (T 'cfg.port808Version' $version.year ($netTcpOwners -join ', '))
+        }
         if ([string]::IsNullOrWhiteSpace([string]$version.dataDir)) {
             $errors += (T 'cfg.noDir' $version.year)
         }
@@ -165,15 +174,29 @@ function Test-PanelConfig {
         $errors += (T 'cfg.proxyPanelClash')
     }
 
-    # net.tcp 808 is baked into the Revit Server protocol - Revit connects to
-    # net.tcp://<host>/ModelService<year>/... with no port, so it is always 808.
-    # Two containers cannot publish the same host port.
-    $netTcpOwners = @($Config.versions | Where-Object { $_.revitClients } | ForEach-Object { [int]$_.year })
     if ($netTcpOwners.Count -gt 1) {
         $errors += (T 'cfg.port808' ($netTcpOwners -join ', '))
     }
+    if ($Config.proxy.enabled -and $proxyPort -eq 808 -and $netTcpOwners.Count -gt 0) {
+        $errors += (T 'cfg.port808Proxy' ($netTcpOwners -join ', '))
+    }
 
     return $errors
+}
+
+# The panel runs on defaults when the saved file is unusable, and its next save
+# would overwrite the hand edits: keep the file next to it first.
+function Backup-InvalidConfig {
+    param([Parameter(Mandatory = $true)][string]$ConfigPath)
+
+    $backup = "$ConfigPath.invalid.bak"
+    try {
+        Copy-Item -LiteralPath $ConfigPath -Destination $backup -Force
+    } catch {
+        Write-Warning (T 'cfg.backupFailed' $backup $_.Exception.Message $ConfigPath)
+        return
+    }
+    Write-Warning (T 'cfg.invalidBackup' $backup $ConfigPath)
 }
 
 function Get-PanelConfig {
@@ -192,10 +215,24 @@ function Get-PanelConfig {
         $loaded = $raw | ConvertFrom-Json
     } catch {
         Write-Warning (T 'cfg.unreadable' $ConfigPath $_.Exception.Message)
+        Backup-InvalidConfig -ConfigPath $ConfigPath
         return $defaults
     }
 
-    return (Merge-ConfigWithDefaults -Loaded $loaded -Defaults $defaults)
+    # The file is edited by hand: what the panel would refuse on save it does
+    # not run with either, because a bad value only surfaces later as a raw
+    # .NET error or a docker failure.
+    try {
+        if ($loaded -isnot [System.Management.Automation.PSCustomObject]) { throw (T 'srv.notObject') }
+        $merged = Merge-ConfigWithDefaults -Loaded $loaded -Defaults $defaults
+        $problems = @(Test-PanelConfig -Config $merged)
+        if ($problems.Count -gt 0) { throw ($problems -join ' ') }
+    } catch {
+        Write-Warning (T 'cfg.invalidSaved' $ConfigPath $_.Exception.Message)
+        Backup-InvalidConfig -ConfigPath $ConfigPath
+        return (New-DefaultConfig -RepoRoot $RepoRoot)
+    }
+    return $merged
 }
 
 function Save-PanelConfig {

@@ -1,6 +1,9 @@
 services:
   rs2022:
-    build: ../src/rs2022
+    build:
+      context: ../src/rs2022
+      args:
+        INSTALLER_SHA256: ${RS2022_INSTALLER_SHA256:-}   # optional, see README.md
     container_name: rs2022
     ports:
       - 2022:80   # upstream for the reverse proxy (docker-compose.proxy.yml)

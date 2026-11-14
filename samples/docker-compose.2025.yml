@@ -1,6 +1,9 @@
 services:
   rs2025:
-    build: ../src/rs2025
+    build:
+      context: ../src/rs2025
+      args:
+        INSTALLER_SHA256: ${RS2025_INSTALLER_SHA256:-}   # optional, see README.md
     container_name: rs2025
     ports:
       - 2025:80   # upstream for the reverse proxy (docker-compose.proxy.yml)

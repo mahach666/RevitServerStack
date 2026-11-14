@@ -1,6 +1,9 @@
 services:
   rs2021:
-    build: ../src/rs2021
+    build:
+      context: ../src/rs2021
+      args:
+        INSTALLER_SHA256: ${RS2021_INSTALLER_SHA256:-}   # optional, see README.md
     container_name: rs2021
     ports:
       - 2021:80   # upstream for the reverse proxy (docker-compose.proxy.yml)

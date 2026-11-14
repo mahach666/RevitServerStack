@@ -1,6 +1,9 @@
 services:
   rs2020:
-    build: ../src/rs2020
+    build:
+      context: ../src/rs2020
+      args:
+        INSTALLER_SHA256: ${RS2020_INSTALLER_SHA256:-}   # optional, see README.md
     container_name: rs2020
     ports:
       - 2020:80   # upstream for the reverse proxy (docker-compose.proxy.yml)
