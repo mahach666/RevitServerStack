@@ -26,7 +26,11 @@ WORKDIR /Autodesk
 # (see CONTRIBUTING.md before changing the file names below).
 ADD https://github.com/ip7z/7zip/releases/download/26.04/7zr.exe 7zr.exe
 ADD "https://damassets.autodesk.net/content/dam/autodesk/external-assets/support-articles/autodesk-revit-server-2026/Revit_Server_2026_4_win_db.sfx.exe" Revit_Server_2026_4_win_db.sfx.exe
-RUN powershell -NoProfile -Command "if ((Get-FileHash 7zr.exe -Algorithm SHA256).Hash -ne '256FECA8E274E5DA655E2A284FABAFD9F554365EB164862089DACD4E8276D282') { throw '7zr.exe does not match the SHA-256 published for 7-Zip 26.04' }" && `
+# Optional integrity check: docker build --build-arg INSTALLER_SHA256=<SHA-256 of the file>
+# fails the build when the downloaded installer is another file. Empty = not checked
+# (see "Verifying the installers" in README.md).
+ARG INSTALLER_SHA256=
+RUN powershell -NoProfile -Command "if ((Get-FileHash 7zr.exe -Algorithm SHA256).Hash -ne '256FECA8E274E5DA655E2A284FABAFD9F554365EB164862089DACD4E8276D282') { throw '7zr.exe does not match the SHA-256 published for 7-Zip 26.04' }; if ($env:INSTALLER_SHA256 -and (Get-FileHash Revit_Server_2026_4_win_db.sfx.exe -Algorithm SHA256).Hash -ne $env:INSTALLER_SHA256) { throw 'Revit_Server_2026_4_win_db.sfx.exe does not match INSTALLER_SHA256' }" && `
     .\7zr.exe x Revit_Server_2026_4_win_db.sfx.exe -oC:\Autodesk\bundle -y RVT_2026_4_NA_win_db_002_002.7z && `
     .\7zr.exe x C:\Autodesk\bundle\RVT_2026_4_NA_win_db_002_002.7z -oC:\Autodesk\image -y -r x64\RSVR\* && `
     rd /s /q C:\Autodesk\bundle

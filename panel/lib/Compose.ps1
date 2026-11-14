@@ -55,8 +55,9 @@ function Write-VersionCompose {
     )
 
     $year = [int]$Version.year
-    $buildContext = ConvertTo-ComposePath (Join-Path (Join-Path $RepoRoot 'src') "rs$year")
-    $dataDir = ConvertTo-ComposePath ([string]$Version.dataDir)
+    # compose interpolates $NAME and ${NAME} in every value: a literal "$" is "$$".
+    $buildContext = (ConvertTo-ComposePath (Join-Path (Join-Path $RepoRoot 'src') "rs$year")).Replace('$', '$$')
+    $dataDir = (ConvertTo-ComposePath ([string]$Version.dataDir)).Replace('$', '$$')
     $target = "C:/ProgramData/Autodesk/Revit Server $year/Projects"
     $portLines = @("      - $(ConvertTo-YamlSingleQuoted "$([int]$Version.hostPort):80")")
 
@@ -78,7 +79,12 @@ function Write-VersionCompose {
         '# Manual edits here are overwritten on the next save.',
         'services:',
         "  rs${year}:",
-        "    build: $(ConvertTo-YamlSingleQuoted $buildContext)",
+        '    build:',
+        "      context: $(ConvertTo-YamlSingleQuoted $buildContext)",
+        # Optional: when RS<year>_INSTALLER_SHA256 is set in the environment of the
+        # panel, the Dockerfile refuses an installer with another SHA-256.
+        '      args:',
+        ('        INSTALLER_SHA256: ' + (ConvertTo-YamlSingleQuoted ('${RS' + $year + '_INSTALLER_SHA256:-}'))),
         "    container_name: rs${year}",
         '    ports:'
     ) + $portLines + @(

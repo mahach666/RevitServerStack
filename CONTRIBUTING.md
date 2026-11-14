@@ -44,12 +44,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File launcher\Build.ps1 -Release
 
 The version comes from the newest `## [x.y.z]` entry of `CHANGELOG.md`. `-Release` packs the files git would commit (tracked and new, ignored ones left out) plus the exe into `dist\RevitServerStack-<version>.zip`, and writes `.sha256` and `RELEASE_NOTES.md` next to it.
 
-To publish: update `CHANGELOG.md`, commit, run the self-checks and the release build, then
+## Cutting a release
+
+The release workflow (`.github/workflows/release.yml`) builds and publishes everything when a tag `v<version>` is pushed.
+
+1. In `CHANGELOG.md` turn the "Unreleased" heading into `## [x.y.z] - YYYY-MM-DD` (a hyphen in the version, `x.y.z-rc.1`, makes a prerelease) and add the compare link at the bottom. The newest entry is the version of the release, so keep a new empty "Unreleased" out of the file until the next change.
+2. Run the self-checks and the release build locally if you like: `Invoke-Tests.ps1` above, and `launcher\Build.ps1 -Release` (writes to `dist\`).
+3. Merge to `master`, then tag that commit and push the tag:
+
+   ```
+   git tag -a v<version> -m "Revit Server Stack <version>"
+   git push origin v<version>
+   ```
+
+The workflow fails before building when the tag is not `v` plus the newest `CHANGELOG.md` version or when that entry is "Unreleased". Otherwise it runs the self-checks, builds `RevitServerStack-<version>.zip` with its `.sha256` and `RELEASE_NOTES.md`, and creates the GitHub release "Revit Server Stack <version>" with the notes and both files. The release workflow has no NuGet or other publishing step.
+
+## Documentation site
+
+The site at <https://mahach666.github.io/RevitServerStack/> is built by docfx from `README.md`, `README.ru.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `CREDITS.md`, `SECURITY.md` and `LICENSE.md` together with `docs/index.md` and `docs/toc.yml`, so there is no second copy of the text. Links in those files must be relative paths between them or absolute URLs (the build runs with warnings as errors). To preview it:
 
 ```
-git tag -a v<version> -m "Revit Server Stack <version>"
-git push origin v<version>
-gh release create v<version> dist\RevitServerStack-<version>.zip dist\RevitServerStack-<version>.zip.sha256 --title "Revit Server Stack <version>" --notes-file dist\RELEASE_NOTES.md
+dotnet tool restore
+dotnet docfx docfx.json --serve
 ```
 
 ## Moving Revit Server 2026 or 2027 to a new update

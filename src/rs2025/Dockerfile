@@ -21,7 +21,12 @@ SHELL ["CMD", "/C"]
 WORKDIR /Autodesk
 # ADD Revit_Server_2025_Win_64bit_dlm.sfx.exe Revit_Server_2025_Win_64bit_dlm.sfx.exe
 ADD "https://up1.autodesk.com/NetSWCOM/RVT/2025/Revit_Server_2025_Win_64bit_dlm.sfx.exe" Revit_Server_2025_Win_64bit_dlm.sfx.exe
-RUN START /W Revit_Server_2025_Win_64bit_dlm.sfx.exe -suppresslaunch -d "C:\Autodesk"
+# Optional integrity check: docker build --build-arg INSTALLER_SHA256=<SHA-256 of the file>
+# fails the build when the downloaded installer is another file. Empty = not checked
+# (see "Verifying the installers" in README.md).
+ARG INSTALLER_SHA256=
+RUN powershell -NoProfile -Command "if ($env:INSTALLER_SHA256 -and (Get-FileHash Revit_Server_2025_Win_64bit_dlm.sfx.exe -Algorithm SHA256).Hash -ne $env:INSTALLER_SHA256) { throw 'Revit_Server_2025_Win_64bit_dlm.sfx.exe does not match INSTALLER_SHA256' }" && `
+    START /W Revit_Server_2025_Win_64bit_dlm.sfx.exe -suppresslaunch -d "C:\Autodesk"
 
 WORKDIR /Autodesk/Revit_Server_2025_Win_64bit_dlm/x64/RS2025
 RUN START /wait msiexec /i RevitServer.msi /q `

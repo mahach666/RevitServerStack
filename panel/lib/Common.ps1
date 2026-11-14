@@ -223,6 +223,25 @@ function Test-ContextEndpoint {
     return ($Endpoint -cmatch '^(ssh|tcp)://[A-Za-z0-9\[][A-Za-z0-9._@:\[\]-]*\z')
 }
 
+# The session token: 32 bytes from the operating system's cryptographic generator
+# (Get-Random is a time-seeded System.Random and guessable by a local process).
+function New-SessionToken {
+    $bytes = New-Object byte[] 32
+    $rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+# Case-sensitive comparison that takes the same time wherever the strings differ.
+function Test-SecretEqual {
+    param([string]$Expected, [string]$Supplied)
+
+    $diff = $Expected.Length -bxor $Supplied.Length
+    $length = [math]::Min($Expected.Length, $Supplied.Length)
+    for ($i = 0; $i -lt $length; $i++) { $diff = $diff -bor ([int]$Expected[$i] -bxor [int]$Supplied[$i]) }
+    return ($diff -eq 0)
+}
+
 function Get-UnixMillis {
     param([datetime]$Value = (Get-Date))
     $epoch = [datetime]::SpecifyKind([datetime]'1970-01-01', [System.DateTimeKind]::Utc)

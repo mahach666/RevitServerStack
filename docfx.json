@@ -1,0 +1,24 @@
+{
+  "build": {
+    "content": [
+      { "src": "docs", "files": ["index.md", "toc.yml"] },
+      {
+        "src": ".",
+        "files": ["README.md", "README.ru.md", "CONTRIBUTING.md", "CHANGELOG.md", "CREDITS.md", "SECURITY.md", "LICENSE.md"],
+        "dest": "."
+      }
+    ],
+    "resource": [
+      { "src": "docs", "files": ["images/**"] }
+    ],
+    "output": "_site",
+    "globalMetadata": {
+      "_appTitle": "Revit Server Stack",
+      "_appLogoPath": "images/revitserverstack-logo.svg",
+      "_appFaviconPath": "images/revitserverstack-logo.svg",
+      "_appFooter": "Revit Server Stack is licensed under the MIT License. Not affiliated with Autodesk or Docker.",
+      "_enableSearch": true
+    },
+    "template": ["default", "modern"]
+  }
+}

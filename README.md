@@ -1,6 +1,17 @@
+<p align="center">
+  <img src="docs/images/revitserverstack-banner.png" alt="Revit Server Stack" width="640">
+</p>
+
+<p align="center">
+  <a href="https://github.com/mahach666/RevitServerStack/releases/latest"><img src="https://img.shields.io/github/v/release/mahach666/RevitServerStack?label=release" alt="Latest release"></a>
+  <a href="https://github.com/mahach666/RevitServerStack/actions/workflows/ci.yml"><img src="https://github.com/mahach666/RevitServerStack/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/mahach666/RevitServerStack/actions/workflows/docs.yml"><img src="https://github.com/mahach666/RevitServerStack/actions/workflows/docs.yml/badge.svg" alt="Docs"></a>
+  <a href="https://deepwiki.com/mahach666/RevitServerStack"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+</p>
+
 # Revit Server Stack
 
-[Русская версия](README.ru.md)
+[Русская версия](README.ru.md) | [Documentation site](https://mahach666.github.io/RevitServerStack/)
 
 Run Autodesk Revit Server 2020 to 2027 in Docker on one Windows machine, several versions side by side, and manage them from a small local web panel.
 
@@ -26,7 +37,7 @@ The Dockerfiles for Revit Server 2020 to 2025 come from [dosymep/revit-server-do
 
 ## Quick start
 
-1. Download `RevitServerStack-<version>.zip` from the [Releases](../../releases) page and unpack it. The folder keeps your settings and, by default, the models (`samples\rs<year>`), so unpack it on a disk with enough free space.
+1. Download `RevitServerStack-<version>.zip` from the [Releases](https://github.com/mahach666/RevitServerStack/releases) page and unpack it. The folder keeps your settings and, by default, the models (`samples\rs<year>`), so unpack it on a disk with enough free space.
 2. Run `RevitServerStack.exe`. An icon appears in the notification area and the panel opens in the browser at `http://localhost:8787/`. The icon menu has "Open the panel", "Startup log" and "Exit". Exit stops the panel, not the containers.
 3. Find the card of the version you need and press "Build and start". The output of the build is shown live.
 4. When the card shows that the version is running, open the admin page:
@@ -76,11 +87,14 @@ Revit Server itself is different. The version ports and the proxy port are publi
 
 ## Run without the panel
 
-A Revit Server version, on the Windows engine:
+A Revit Server version, on the Windows engine. The models folder has to exist first, because the Windows engine does not create a missing bind source (the panel creates it for you; a fresh clone has no `samples\rs2022`):
 
 ```
+if not exist samples\rs2022 mkdir samples\rs2022
 docker --context desktop-windows compose -f samples\docker-compose.2022.yml up -d --build
 ```
+
+In PowerShell the first line is `New-Item -ItemType Directory -Force samples\rs2022 | Out-Null`.
 
 The proxy, on the Linux engine (the default context):
 
@@ -89,6 +103,16 @@ docker compose -f samples\docker-compose.proxy.yml up -d
 ```
 
 Replace `up -d --build` with `stop` or `down` to stop or remove. The samples publish only the HTTP port (`2022:80`). To let Revit connect, add `- '808:808'` to the `ports` list of one version. The sample `nginx.conf` routes all eight versions, while the panel generates a config for the enabled ones only.
+
+## Verifying the installers
+
+The Dockerfiles download the Autodesk installers over HTTPS. The repository does not pin their SHA-256: Autodesk may re-publish a file under the same address, and a hash that was not checked against the vendor would be worse than none. If you want the build to fail when the download is not the file you expect, give it the SHA-256 of that file (from Autodesk, or `Get-FileHash <file> -Algorithm SHA256` on a copy you trust):
+
+- with the panel or the tray icon: set the environment variable `RS<year>_INSTALLER_SHA256` (for example `RS2022_INSTALLER_SHA256`) before starting them;
+- with the compose samples: set the same variable in the shell before `docker compose ... up -d --build`;
+- with `docker build` directly: `docker build --build-arg INSTALLER_SHA256=<hash> src\rs2022`.
+
+An empty value, the default, means no check. For 2026 and 2027 the hash is that of the `.sfx.exe` installer (the 7-Zip helper is pinned already). The check runs when the image is built, so rebuild an existing image after setting the value. Note: after updating to this version the first build of every image runs the installer again (about 14 GB), because the installer step of the Dockerfiles changed; later builds use the cache.
 
 ## Docker on another computer
 

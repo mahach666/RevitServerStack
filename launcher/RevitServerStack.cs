@@ -198,6 +198,10 @@ namespace RevitServerStack
 
         private void Fail(string message)
         {
+            // The panel is gone or going: its address must not be offered any more
+            // (a crashed PowerShell never gets to remove the file itself).
+            url = null;
+            DeleteQuietly(urlFile);
             SetState(State.Stopped, Title + ": " + L10n.Get("notRunning"));
             icon.ShowBalloonTip(5000, Title, message, ToolTipIcon.Error);
         }
@@ -208,13 +212,26 @@ namespace RevitServerStack
             icon.Visible = false;
             icon.Dispose();
 
-            // The panel also stops by itself once this process is gone; waiting
-            // here only makes a quick restart find its port free.
-            if (server != null && !server.HasExited && !server.WaitForExit(3000))
+            // The panel's own watch for this process cannot fire while this process
+            // is still alive, so it is stopped here, at once. Its port is free by
+            // the time a quick restart asks for it, and the address file, which
+            // the panel does not get to remove when killed, goes with it.
+            try
             {
-                server.Kill(); // the server only: docker jobs it started keep running
+                if (server != null && !server.HasExited)
+                {
+                    server.Kill(); // the server only: docker jobs it started keep running
+                    server.WaitForExit(3000);
+                }
             }
-            ExitThread();
+            catch (InvalidOperationException) { } // it exited on its own in the meantime
+            catch (System.ComponentModel.Win32Exception) { } // already terminating, or access denied
+            finally
+            {
+                // The icon is gone: whatever Kill did, the launcher must not stay alive without it.
+                DeleteQuietly(urlFile);
+                ExitThread();
+            }
         }
 
         // --------------------------------------------------------------- menu --

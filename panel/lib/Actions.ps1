@@ -200,6 +200,12 @@ function Invoke-StartAll {
     return $results
 }
 
+# True when every per-target result of StartAll / StopAll succeeded.
+function Test-AllResultsOk {
+    param($Results)
+    return (@($Results | Where-Object { -not $_.result.ok }).Count -eq 0)
+}
+
 function Invoke-StopAll {
     param(
         [Parameter(Mandatory = $true)]$Config,
