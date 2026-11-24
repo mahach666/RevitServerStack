@@ -2,6 +2,12 @@
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- The documentation logo fits inside the navigation bar.
+
 ## [1.2.0] - 2026-11-14
 
 ### Added
